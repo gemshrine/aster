@@ -27,6 +27,7 @@ fn fast_timing() -> Timing {
         backoff_max: Duration::from_millis(200),
         connect_timeout: Duration::from_secs(2),
         idle_timeout: Duration::from_secs(5),
+        ping_interval: Duration::from_secs(5),
     }
 }
 
@@ -393,4 +394,85 @@ async fn reconnects_after_connection_loss() {
         ConnectionState::Reconnecting { attempt: 1, .. }
             | ConnectionState::Connecting { attempt: 2 }
     ));
+}
+
+/// Accepts one WS connection, answers `Hello` with `reply`, then runs `after`.
+async fn fake_server<F, Fut>(reply: &'static str, after: F) -> SocketAddr
+where
+    F: FnOnce(tokio_tungstenite::WebSocketStream<TcpStream>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        while let Some(Ok(frame)) = ws.next().await {
+            if let Message::Text(text) = frame {
+                assert!(text.contains(r#""type":"hello""#), "{text}");
+                break;
+            }
+        }
+        ws.send(Message::text(reply)).await.unwrap();
+        after(ws).await;
+    });
+    addr
+}
+
+#[tokio::test]
+async fn unknown_rejection_reason_fails_as_other() {
+    let addr = fake_server(r#"{"type":"rejected","reason":"banned"}"#, |_| async {}).await;
+    let mut core = Core::start();
+    core.connect(addr, ALICE);
+    core.wait_for(|e| {
+        *e == CoreEvent::State(ConnectionState::Failed {
+            reason: FailReason::Other,
+        })
+    })
+    .await;
+    assert_eq!(
+        serde_json::to_string(&core.handle.state()).unwrap(),
+        r#"{"state":"failed","reason":"other"}"#
+    );
+}
+
+#[tokio::test]
+async fn client_pings_while_connected() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (pings_tx, mut pings) = mpsc::unbounded_channel();
+    let addr = fake_server(
+        r#"{"type":"welcome","user_id":"alice","peer_online":false,"ice_servers":[]}"#,
+        move |mut ws| async move {
+            // The server never pings here, so any ping comes from the client.
+            while let Some(Ok(frame)) = ws.next().await {
+                if let Message::Ping(_) = frame {
+                    let _ = pings_tx.send(());
+                }
+            }
+        },
+    )
+    .await;
+
+    let (tx, _events) = mpsc::unbounded_channel();
+    let (handle, actor) = signaling(
+        tx,
+        Timing {
+            ping_interval: Duration::from_millis(50),
+            ..fast_timing()
+        },
+    );
+    tokio::spawn(actor);
+    handle.connect(Settings::new(&format!("ws://{addr}/ws"), ALICE).unwrap());
+
+    for _ in 0..3 {
+        tokio::time::timeout(WAIT, pings.recv())
+            .await
+            .expect("client did not ping")
+            .unwrap();
+    }
 }

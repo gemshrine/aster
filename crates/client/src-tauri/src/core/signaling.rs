@@ -40,6 +40,8 @@ pub enum FailReason {
     InvalidToken,
     UnsupportedProtocolVersion,
     SessionReplaced,
+    /// A rejection this client version does not know.
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -92,6 +94,9 @@ pub struct Timing {
     pub backoff_max: Duration,
     pub connect_timeout: Duration,
     pub idle_timeout: Duration,
+    /// Own WS pings keep the server's idle timeout satisfied regardless of
+    /// whether its pings get answered in time.
+    pub ping_interval: Duration,
 }
 
 impl Default for Timing {
@@ -101,6 +106,7 @@ impl Default for Timing {
             backoff_max: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(10),
             idle_timeout: Duration::from_secs(60),
+            ping_interval: Duration::from_secs(20),
         }
     }
 }
@@ -311,6 +317,7 @@ impl Actor {
                     RejectReason::UnsupportedProtocolVersion => {
                         FailReason::UnsupportedProtocolVersion
                     }
+                    RejectReason::Unknown => FailReason::Other,
                 });
             }
             _ => {
@@ -334,9 +341,16 @@ impl Actor {
         let lost = SessionEnd::Lost {
             was_connected: true,
         };
+        let period = self.timing.ping_interval;
+        let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
 
         loop {
             tokio::select! {
+                _ = ping.tick() => {
+                    if ws.send(Message::Ping(Default::default())).await.is_err() {
+                        return lost;
+                    }
+                }
                 frame = timeout(self.timing.idle_timeout, ws.next()) => {
                     let text = match frame {
                         Ok(Some(Ok(Message::Text(text)))) => text,

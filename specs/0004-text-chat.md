@@ -25,7 +25,7 @@
 
 ### UI-поведение
 
-- Статусы сообщения: `Sending -> Sent (delivered to server) -> Delivered (получатель online, доставлено) / Queued (получатель offline)`.
+- Статусы сообщения: `Sending -> Sent (delivered to server) -> Delivered (получатель online, доставлено) / Queued (получатель offline)`; `Failed` — сервер отбросил сообщение (`queue_full`). Как сигналы клиентского ядра отображаются на статусы и где дедупликация — `0009`.
 - Индикатор presence второго пользователя (online/offline) — из `PeerStatus`.
 
 ## Альтернативы
