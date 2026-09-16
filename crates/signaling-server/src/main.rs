@@ -1,20 +1,24 @@
-use axum::{Router, routing::get};
+use std::process::ExitCode;
+use std::sync::Arc;
 
-/// Builds the axum [`Router`] for the signaling server.
-///
-/// Split out from `main` so it can be exercised directly in tests without
-/// binding a real socket.
-pub fn app() -> Router {
-    Router::new().route("/health", get(health))
-}
-
-async fn health() -> &'static str {
-    "ok"
-}
+use signaling_server::app;
+use signaling_server::config::Users;
+use signaling_server::hub::Hub;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     tracing_subscriber::fmt::init();
+
+    let users = match std::env::var("ASTER_USERS")
+        .map_err(|_| "ASTER_USERS is not set (expected `id:token,id:token`)".to_string())
+        .and_then(|raw| Users::parse(&raw))
+    {
+        Ok(users) => users,
+        Err(err) => {
+            tracing::error!("invalid configuration: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let port: u16 = std::env::var("PORT")
         .ok()
@@ -22,39 +26,22 @@ async fn main() {
         .unwrap_or(8080);
     let addr = format!("0.0.0.0:{port}");
 
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .unwrap_or_else(|err| panic!("failed to bind {addr}: {err}"));
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::error!("failed to bind {addr}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     tracing::info!(
         %addr,
         protocol_version = protocol::PROTOCOL_VERSION,
         "signaling-server listening"
     );
 
-    axum::serve(listener, app())
-        .await
-        .expect("signaling-server crashed");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use tower::ServiceExt;
-
-    #[tokio::test]
-    async fn health_check_returns_ok() {
-        let response = app()
-            .oneshot(
-                Request::builder()
-                    .uri("/health")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
+    if let Err(err) = axum::serve(listener, app(Arc::new(Hub::new(users)))).await {
+        tracing::error!("server error: {err}");
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }
