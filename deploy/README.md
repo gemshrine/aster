@@ -43,6 +43,10 @@ docker compose logs -f signaling-server
 
 Каждому пользователю передать его `id` и токен из `ASTER_USERS` по приватному каналу — они вводятся в клиенте.
 
+## Логи
+
+`docker compose logs -f signaling-server` — по умолчанию уровень `info` (подключения, отказы по токену). Подробнее — добавить `RUST_LOG: debug` в `environment` сервиса `signaling-server`.
+
 ## Обновление
 
 ```bash
