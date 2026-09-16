@@ -244,7 +244,7 @@ impl ChatStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, direction, body, sent_at, status FROM messages
              WHERE direction = 'out' AND status IN ('sending', 'sent')
-             ORDER BY sent_at, received_at, id",
+             ORDER BY sent_at, received_at, rowid",
         )?;
         let rows = stmt.query_map([], row_to_message)?;
         rows.collect::<Result<_, _>>().map_err(Into::into)
@@ -257,7 +257,7 @@ impl ChatStore {
             None => {
                 let mut stmt = self.conn.prepare(
                     "SELECT id, direction, body, sent_at, status FROM messages
-                     ORDER BY sent_at DESC, received_at DESC, id DESC LIMIT ?1",
+                     ORDER BY sent_at DESC, received_at DESC, rowid DESC LIMIT ?1",
                 )?;
                 let rows = stmt
                     .query_map([limit], row_to_message)?
@@ -265,25 +265,22 @@ impl ChatStore {
                 rows
             }
             Some(before) => {
-                let key: Option<(i64, i64)> = self
+                let key: Option<(i64, i64, i64)> = self
                     .conn
                     .query_row(
-                        "SELECT sent_at, received_at FROM messages WHERE id = ?1",
+                        "SELECT sent_at, received_at, rowid FROM messages WHERE id = ?1",
                         [before.to_string()],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )
                     .optional()?;
-                let (sent_at, received_at) = key.ok_or(ChatError::NotFound)?;
+                let (sent_at, received_at, rowid) = key.ok_or(ChatError::NotFound)?;
                 let mut stmt = self.conn.prepare(
                     "SELECT id, direction, body, sent_at, status FROM messages
-                     WHERE (sent_at, received_at, id) < (?1, ?2, ?3)
-                     ORDER BY sent_at DESC, received_at DESC, id DESC LIMIT ?4",
+                     WHERE (sent_at, received_at, rowid) < (?1, ?2, ?3)
+                     ORDER BY sent_at DESC, received_at DESC, rowid DESC LIMIT ?4",
                 )?;
                 let rows = stmt
-                    .query_map(
-                        params![sent_at, received_at, before.to_string(), limit],
-                        row_to_message,
-                    )?
+                    .query_map(params![sent_at, received_at, rowid, limit], row_to_message)?
                     .collect::<Result<Vec<_>, _>>()?;
                 rows
             }
@@ -497,6 +494,42 @@ mod tests {
         assert_eq!(message.body, "привет");
         assert_eq!(message.status, Some(Status::Sending));
         assert_eq!(message.direction, Direction::Out);
+    }
+
+    #[test]
+    fn messages_sharing_a_timestamp_keep_insertion_order() {
+        // Two messages can land in the same millisecond — a fast reply, or a
+        // queue flushed on reconnect. Then only the order they were stored in
+        // is left to sort by; a random UUID would shuffle them at every read.
+        let store = store();
+        for body in ["первое", "второе", "третье"] {
+            store.insert_incoming(Uuid::new_v4(), body, 7, 7).unwrap();
+        }
+        let bodies: Vec<_> = store
+            .page(None, 50)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.body)
+            .collect();
+        assert_eq!(bodies, ["первое", "второе", "третье"]);
+    }
+
+    #[test]
+    fn paging_through_a_shared_timestamp_does_not_repeat_or_skip() {
+        let store = store();
+        for body in ["a", "b", "c", "d"] {
+            store.insert_incoming(Uuid::new_v4(), body, 7, 7).unwrap();
+        }
+        let tail = store.page(None, 2).unwrap();
+        assert_eq!(
+            tail.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(),
+            ["c", "d"]
+        );
+        let head = store.page(Some(tail[0].id), 2).unwrap();
+        assert_eq!(
+            head.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
     }
 
     #[test]
