@@ -108,6 +108,9 @@ pub enum SignalPayload {
 pub enum RejectReason {
     InvalidToken,
     UnsupportedProtocolVersion,
+    /// Any reason a newer server adds; never sent by this version.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +126,9 @@ pub enum ErrorCode {
     SessionReplaced,
     /// The offline queue for the recipient is full; the message was dropped.
     QueueFull,
+    /// Any code a newer server adds; never sent by this version.
+    #[serde(other)]
+    Unknown,
 }
 
 #[cfg(test)]
@@ -304,6 +310,27 @@ mod tests {
                     {"urls": ["turn:h:3478?transport=udp"], "username": "1:alice", "credential": "c"}
                 ]
             })
+        );
+    }
+
+    #[test]
+    fn unknown_reasons_and_codes_fall_back() {
+        assert_eq!(
+            serde_json::from_str::<ServerMessage>(r#"{"type":"rejected","reason":"banned"}"#)
+                .unwrap(),
+            ServerMessage::Rejected {
+                reason: RejectReason::Unknown
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<ServerMessage>(
+                r#"{"type":"error","code":"rate_limited","message":"slow down"}"#
+            )
+            .unwrap(),
+            ServerMessage::Error {
+                code: ErrorCode::Unknown,
+                message: "slow down".into()
+            }
         );
     }
 
