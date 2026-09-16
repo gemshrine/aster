@@ -8,6 +8,8 @@ services:
     restart: unless-stopped
     environment:
       ASTER_USERS: ${ASTER_USERS:?set ASTER_USERS in deploy/.env}
+      TURN_HOST: ${ASTER_DOMAIN:?set ASTER_DOMAIN in deploy/.env}
+      TURN_SECRET: ${TURN_SECRET:?set TURN_SECRET in deploy/.env}
     expose:
       - "8080"
 

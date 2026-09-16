@@ -21,13 +21,15 @@
 
 ```
 Client -> Server: Hello { protocol_version, auth_token }
-Server -> Client: Welcome { user_id, peer_online: bool }
+Server -> Client: Welcome { user_id, peer_online: bool, ice_servers: Vec<IceServer> }
                   | Rejected { reason: RejectReason }
 
 enum RejectReason { InvalidToken, UnsupportedProtocolVersion }
 ```
 
-`UserId` — строка (`"user_id": "alice"`). После `Rejected` сервер закрывает соединение. Любое другое сообщение до успешного `Hello` → `Error { NotAuthenticated }`.
+`UserId` — строка (`"user_id": "alice"`).
+
+`IceServer { urls: Vec<String>, username: Option<String>, credential: Option<String> }` повторяет `RTCIceServer` (пустые `username`/`credential` не сериализуются). Сервер отдаёт `stun:<host>:3478` и `turn:<host>:3478?transport=udp|tcp` с временными кредами по схеме TURN REST API: `username = "<unix_expiry>:<user_id>"`, `credential = base64(HMAC-SHA1(TURN_SECRET, username))`, срок жизни 24h. Если сервер запущен без `TURN_HOST`/`TURN_SECRET`, список пустой. Добавлено в #23, `PROTOCOL_VERSION = 2`. После `Rejected` сервер закрывает соединение. Любое другое сообщение до успешного `Hello` → `Error { NotAuthenticated }`.
 
 `auth_token` — см. `0006-auth-security.md` (пер-пользовательский долгоживущий токен, выданный вручную при деплое).
 
