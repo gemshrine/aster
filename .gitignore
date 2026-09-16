@@ -1,0 +1,11 @@
+/target
+**/target
+Cargo.lock.bak
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.DS_Store
+*.log
+gen/schemas
