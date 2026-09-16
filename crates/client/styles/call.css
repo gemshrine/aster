@@ -61,6 +61,7 @@
 }
 
 .call-control {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -81,8 +82,21 @@
 }
 
 .call-control--off {
-  background: color-mix(in srgb, var(--rose) 20%, transparent);
+  background: color-mix(in srgb, var(--rose) 30%, transparent);
+  box-shadow: inset 0 0 0 1px var(--rose);
   color: var(--rose);
+}
+
+/* a slash across the mic, so a muted button reads as muted at a glance and
+   not only by its colour */
+.call-control--off::after {
+  content: "";
+  position: absolute;
+  width: 24px;
+  height: 1.8px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: rotate(-45deg);
 }
 
 .call-control--leave,
