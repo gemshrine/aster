@@ -85,6 +85,16 @@ cargo tauri dev
 rustup target add wasm32-unknown-unknown
 cargo install trunk --locked
 cargo install tauri-cli --version "^2" --locked
+
+# звук в звонках (фича `audio-device`, включена по умолчанию) — заголовки ALSA
+sudo dnf install alsa-lib-devel        # Fedora
+sudo apt install libasound2-dev        # Debian/Ubuntu
+```
+
+Без ALSA клиент собирается с `--no-default-features`: звонки устанавливаются, но без звука, все тесты ядра проходят:
+
+```bash
+cargo test -p client-tauri --no-default-features
 ```
 
 ## Конвенции

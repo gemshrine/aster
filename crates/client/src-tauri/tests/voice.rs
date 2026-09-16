@@ -1,0 +1,337 @@
+mod common;
+
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+use client_tauri_lib::core::settings::Settings;
+use client_tauri_lib::core::signaling::{signaling, ConnectionState, SignalingHandle};
+use client_tauri_lib::core::voice::audio::{
+    AudioBackend, AudioStream, CaptureSink, PlaybackSource,
+};
+use client_tauri_lib::core::voice::call::{
+    voice, CallConfig, CallError, CallState, EndReason, VoiceEvent, VoiceHandle,
+};
+use client_tauri_lib::core::voice::media::signal::{tone_ratio, Sine};
+use client_tauri_lib::core::voice::media::{level_dbfs, FRAME};
+use common::{fast_timing, spawn_server, ALICE, BOB, WAIT};
+use signaling_server::hub::QueueLimits;
+use tokio::sync::mpsc;
+
+/// Plays a sine into capture and records everything handed to playback.
+struct ToneBackend {
+    freq: f32,
+    played: Arc<Mutex<Vec<f32>>>,
+}
+
+struct ThreadStream {
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl AudioStream for ThreadStream {}
+
+impl Drop for ThreadStream {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn every_frame(mut tick: impl FnMut() + Send + 'static) -> Box<dyn AudioStream> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    let thread = thread::spawn(move || {
+        let period = Duration::from_millis(20);
+        let mut next = std::time::Instant::now();
+        while !stopped.load(Ordering::Relaxed) {
+            tick();
+            next += period;
+            thread::sleep(next.saturating_duration_since(std::time::Instant::now()));
+        }
+    });
+    Box::new(ThreadStream {
+        stop,
+        thread: Some(thread),
+    })
+}
+
+impl AudioBackend for ToneBackend {
+    fn capture(&self, mut sink: CaptureSink) -> Result<Box<dyn AudioStream>, String> {
+        let mut sine = Sine::new(self.freq, 0.3);
+        Ok(every_frame(move || sink(&sine.next_frame())))
+    }
+
+    fn playback(&self, mut source: PlaybackSource) -> Result<Box<dyn AudioStream>, String> {
+        let played = self.played.clone();
+        Ok(every_frame(move || {
+            let frame = source();
+            played.lock().unwrap().extend_from_slice(&frame);
+        }))
+    }
+}
+
+struct Peer {
+    signaling: SignalingHandle,
+    voice: VoiceHandle,
+    events: mpsc::UnboundedReceiver<VoiceEvent>,
+    played: Arc<Mutex<Vec<f32>>>,
+}
+
+impl Peer {
+    async fn online(addr: SocketAddr, token: &str, freq: f32, config: CallConfig) -> Self {
+        let (core_tx, mut core_events) = mpsc::unbounded_channel();
+        let (signaling, actor) = signaling(core_tx, fast_timing());
+        tokio::spawn(actor);
+
+        let played = Arc::new(Mutex::new(Vec::new()));
+        let backend = Arc::new(ToneBackend {
+            freq,
+            played: played.clone(),
+        });
+        let (voice_tx, events) = mpsc::unbounded_channel();
+        let (voice, actor) = voice(signaling.clone(), backend, voice_tx, config);
+        tokio::spawn(actor);
+
+        let forward = voice.clone();
+        tokio::spawn(async move {
+            while let Some(event) = core_events.recv().await {
+                forward.core_event(&event);
+            }
+        });
+
+        signaling.connect(Settings::new(&format!("ws://{addr}/ws"), token).unwrap());
+        tokio::time::timeout(WAIT, async {
+            while !matches!(signaling.state(), ConnectionState::Connected { .. }) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("did not connect");
+
+        Self {
+            signaling,
+            voice,
+            events,
+            played,
+        }
+    }
+
+    async fn wait(&mut self, pred: impl Fn(&VoiceEvent) -> bool) -> VoiceEvent {
+        let fut = async {
+            loop {
+                let event = self.events.recv().await.expect("voice stopped");
+                if pred(&event) {
+                    return event;
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), fut)
+            .await
+            .expect("expected voice event did not arrive")
+    }
+
+    async fn wait_state(&mut self, state: CallState) {
+        self.wait(|e| *e == VoiceEvent::State(state.clone())).await;
+    }
+
+    async fn wait_connected(&mut self) {
+        self.wait(|e| matches!(e, VoiceEvent::State(CallState::Connected { .. })))
+            .await;
+    }
+
+    async fn wait_ended(&mut self, reason: EndReason) {
+        self.wait_state(CallState::Ended { reason }).await;
+    }
+
+    /// The last `ms` of what reached this peer's speaker.
+    fn played_tail(&self, ms: usize) -> Vec<f32> {
+        let played = self.played.lock().unwrap();
+        let len = (ms * 48).min(played.len());
+        played[played.len() - len..].to_vec()
+    }
+}
+
+fn test_config() -> CallConfig {
+    CallConfig {
+        udp_addrs: vec!["127.0.0.1:0".to_string()],
+        ..CallConfig::default()
+    }
+}
+
+async fn both_online(config: CallConfig) -> (Peer, Peer) {
+    let addr = spawn_server(QueueLimits::default()).await;
+    let alice = Peer::online(addr, ALICE, 440.0, config.clone()).await;
+    let bob = Peer::online(addr, BOB, 1000.0, config).await;
+    tokio::time::timeout(WAIT, async {
+        while !matches!(
+            alice.signaling.state(),
+            ConnectionState::Connected {
+                peer_online: true,
+                ..
+            }
+        ) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("peer did not come online");
+    (alice, bob)
+}
+
+async fn connected_call() -> (Peer, Peer) {
+    let (mut alice, mut bob) = both_online(test_config()).await;
+    alice.voice.start_call().await.unwrap();
+    alice.wait_state(CallState::Calling).await;
+    bob.wait_state(CallState::Ringing).await;
+    bob.voice.accept_call().await.unwrap();
+    alice.wait_connected().await;
+    bob.wait_connected().await;
+    (alice, bob)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn call_connects_and_audio_flows_both_ways() {
+    let (mut alice, mut bob) = connected_call().await;
+
+    alice
+        .wait(|e| matches!(e, VoiceEvent::Audio(a) if a.remote_speaking && a.local_speaking))
+        .await;
+    bob.wait(|e| matches!(e, VoiceEvent::Audio(a) if a.remote_speaking))
+        .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    let at_bob = bob.played_tail(400);
+    assert!(
+        level_dbfs(&at_bob) > -20.0,
+        "bob hears {} dBFS",
+        level_dbfs(&at_bob)
+    );
+    assert!(
+        tone_ratio(&at_bob, 440.0) > 0.5,
+        "440 Hz at bob: {}",
+        tone_ratio(&at_bob, 440.0)
+    );
+    assert!(tone_ratio(&at_bob, 1000.0) < 0.1);
+
+    let at_alice = alice.played_tail(400);
+    assert!(level_dbfs(&at_alice) > -20.0);
+    assert!(
+        tone_ratio(&at_alice, 1000.0) > 0.5,
+        "1000 Hz at alice: {}",
+        tone_ratio(&at_alice, 1000.0)
+    );
+    assert!(tone_ratio(&at_alice, 440.0) < 0.1);
+
+    alice.voice.hang_up().await.unwrap();
+    alice.wait_ended(EndReason::Hangup).await;
+    bob.wait_ended(EndReason::RemoteHangup).await;
+    assert_eq!(bob.voice.state(), CallState::Idle);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mute_silences_the_microphone() {
+    let (mut alice, mut bob) = connected_call().await;
+    bob.wait(|e| matches!(e, VoiceEvent::Audio(a) if a.remote_speaking))
+        .await;
+
+    alice.voice.set_muted(true).await.unwrap();
+    alice
+        .wait(|e| matches!(e, VoiceEvent::Audio(a) if a.muted && !a.local_speaking))
+        .await;
+    bob.wait(|e| matches!(e, VoiceEvent::Audio(a) if !a.remote_speaking))
+        .await;
+    let at_bob = bob.played_tail(200);
+    assert!(
+        level_dbfs(&at_bob) < -45.0,
+        "{} dBFS after mute",
+        level_dbfs(&at_bob)
+    );
+
+    alice.voice.set_muted(false).await.unwrap();
+    bob.wait(|e| matches!(e, VoiceEvent::Audio(a) if a.remote_speaking))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn declined_call_ends_for_both() {
+    let (mut alice, mut bob) = both_online(test_config()).await;
+    alice.voice.start_call().await.unwrap();
+    bob.wait_state(CallState::Ringing).await;
+    assert_eq!(
+        alice.voice.accept_call().await,
+        Err(CallError::InvalidState)
+    );
+
+    bob.voice.decline_call().await.unwrap();
+    bob.wait_ended(EndReason::Declined).await;
+    alice.wait_ended(EndReason::Declined).await;
+    assert_eq!(alice.voice.state(), CallState::Idle);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn caller_can_cancel_while_ringing() {
+    let (mut alice, mut bob) = both_online(test_config()).await;
+    alice.voice.start_call().await.unwrap();
+    bob.wait_state(CallState::Ringing).await;
+
+    alice.voice.hang_up().await.unwrap();
+    alice.wait_ended(EndReason::Hangup).await;
+    bob.wait_ended(EndReason::Cancelled).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unanswered_call_times_out() {
+    let (mut alice, mut bob) = both_online(CallConfig {
+        ring_timeout: Duration::from_millis(400),
+        ..test_config()
+    })
+    .await;
+    alice.voice.start_call().await.unwrap();
+    bob.wait_state(CallState::Ringing).await;
+    alice.wait_ended(EndReason::Timeout).await;
+    bob.wait(|e| matches!(e, VoiceEvent::State(CallState::Ended { .. })))
+        .await;
+    assert_eq!(bob.voice.state(), CallState::Idle);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn simultaneous_calls_connect_once() {
+    let (mut alice, mut bob) = both_online(test_config()).await;
+    let (a, b) = tokio::join!(alice.voice.start_call(), bob.voice.start_call());
+    a.unwrap();
+    b.unwrap();
+    alice.wait_connected().await;
+    bob.wait_connected().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(matches!(alice.voice.state(), CallState::Connected { .. }));
+    assert!(matches!(bob.voice.state(), CallState::Connected { .. }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn calling_requires_an_online_peer() {
+    let addr = spawn_server(QueueLimits::default()).await;
+    let alice = Peer::online(addr, ALICE, 440.0, test_config()).await;
+    assert_eq!(alice.voice.start_call().await, Err(CallError::PeerOffline));
+    assert_eq!(alice.voice.hang_up().await, Err(CallError::InvalidState));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn caller_going_offline_ends_ringing() {
+    let (mut alice, mut bob) = both_online(test_config()).await;
+    alice.voice.start_call().await.unwrap();
+    bob.wait_state(CallState::Ringing).await;
+
+    alice.signaling.disconnect();
+    alice.wait_ended(EndReason::ConnectionLost).await;
+    bob.wait_ended(EndReason::PeerOffline).await;
+}
+
+#[test]
+fn frame_is_20ms() {
+    assert_eq!(FRAME, 960);
+}

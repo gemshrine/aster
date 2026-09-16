@@ -120,6 +120,10 @@ enum Command {
         sent_at: i64,
         reply: oneshot::Sender<Result<(), SendError>>,
     },
+    SendSignal {
+        payload: SignalPayload,
+        reply: oneshot::Sender<Result<(), SendError>>,
+    },
 }
 
 #[derive(Clone)]
@@ -157,6 +161,14 @@ impl SignalingHandle {
                 sent_at,
                 reply,
             })
+            .map_err(|_| SendError::NotConnected)?;
+        rx.await.unwrap_or(Err(SendError::NotConnected))
+    }
+
+    pub async fn send_signal(&self, payload: SignalPayload) -> Result<(), SendError> {
+        let (reply, rx) = oneshot::channel();
+        self.commands
+            .send(Command::SendSignal { payload, reply })
             .map_err(|_| SendError::NotConnected)?;
         rx.await.unwrap_or(Err(SendError::NotConnected))
     }
@@ -218,6 +230,10 @@ impl Actor {
                     Some(Command::Connect(settings)) => settings,
                     Some(Command::Disconnect) => continue,
                     Some(Command::SendChat { reply, .. }) => {
+                        let _ = reply.send(Err(SendError::NotConnected));
+                        continue;
+                    }
+                    Some(Command::SendSignal { reply, .. }) => {
                         let _ = reply.send(Err(SendError::NotConnected));
                         continue;
                     }
@@ -381,6 +397,15 @@ impl Actor {
                         pending.push_back(id);
                         let _ = reply.send(Ok(()));
                     }
+                    Some(Command::SendSignal { payload, reply }) => {
+                        let msg = ClientMessage::Signal { payload };
+                        let json = serde_json::to_string(&msg).expect("ClientMessage serializes");
+                        if ws.send(Message::text(json)).await.is_err() {
+                            let _ = reply.send(Err(SendError::Io));
+                            return lost;
+                        }
+                        let _ = reply.send(Ok(()));
+                    }
                 },
             }
         }
@@ -460,6 +485,9 @@ impl Actor {
                     Some(Command::Disconnect) => return Err(Interrupt::Disconnect),
                     Some(Command::Connect(settings)) => return Err(Interrupt::Reconfigure(settings)),
                     Some(Command::SendChat { reply, .. }) => {
+                        let _ = reply.send(Err(SendError::NotConnected));
+                    }
+                    Some(Command::SendSignal { reply, .. }) => {
                         let _ = reply.send(Err(SendError::NotConnected));
                     }
                 },

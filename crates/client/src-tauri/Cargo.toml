@@ -8,9 +8,14 @@ name = "client_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
+async-trait = "0.1.92"
+bytes = "1.12.1"
+cpal = { version = "0.18", optional = true }
 fastrand = "2.5.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+opus-pure = "0.2"
 protocol = { version = "0.1.0", path = "../../protocol" }
+rtc = "0.20.5"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -19,6 +24,7 @@ tokio = { version = "1.53.1", features = ["rt", "macros", "time", "sync", "net"]
 tokio-tungstenite = { version = "0.30.0", features = ["connect", "rustls-tls-webpki-roots"] }
 url = "2.5.8"
 uuid = { version = "1.26.1", features = ["serde", "v4"] }
+webrtc = "0.20.5"
 
 [build-dependencies]
 tauri-build = "2.6.3"
@@ -30,3 +36,8 @@ serde_json = "1.0.151"
 signaling-server = { path = "../../signaling-server" }
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["full", "test-util"] }
+
+[features]
+default = ["audio-device"]
+# Real sound through cpal; needs ALSA headers on Linux (specs/0011).
+audio-device = ["dep:cpal"]

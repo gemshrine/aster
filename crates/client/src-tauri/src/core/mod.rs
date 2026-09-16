@@ -3,3 +3,4 @@
 pub mod chat;
 pub mod settings;
 pub mod signaling;
+pub mod voice;
