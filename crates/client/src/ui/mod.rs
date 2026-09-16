@@ -1,6 +1,7 @@
 //! UI layer: icons, primitives and the window shell (spec 0008).
 
 pub mod avatar;
+pub mod call;
 pub mod chat;
 #[cfg(debug_assertions)]
 pub mod gallery;

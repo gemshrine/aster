@@ -3,10 +3,12 @@
 
 use leptos::prelude::*;
 
+use crate::call::{CallState, EndReason};
 use crate::chat::{Author, Message, Status};
 use crate::connection::{ConnectionState, FailureReason};
 
 use super::avatar::{Avatar, Presence};
+use super::call::{CallOutcome, CallPane};
 use super::chat::{Composer, MessageList};
 use super::icon_button::{IconButton, IconButtonKind};
 use super::icons::Icon;
@@ -115,6 +117,79 @@ fn mock_messages() -> Vec<Message> {
             }),
         ),
     ]
+}
+
+#[component]
+fn CallCase() -> impl IntoView {
+    let states = [
+        ("calling", CallState::Calling),
+        ("ringing", CallState::Ringing),
+        ("connecting", CallState::Connecting),
+        (
+            "connected",
+            CallState::Connected {
+                since: js_sys::Date::now() as i64 - 74_000,
+            },
+        ),
+    ];
+    let state = RwSignal::new(CallState::Connected {
+        since: js_sys::Date::now() as i64 - 74_000,
+    });
+    let muted = RwSignal::new(false);
+    let remote_speaking = RwSignal::new(true);
+
+    view! {
+        <div style="width:100%;">
+            <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+                {states
+                    .into_iter()
+                    .map(|(label, value)| {
+                        let value = StoredValue::new(value);
+                        view! {
+                            <button
+                                class="peer__call t-ui-strong"
+                                style="width:auto; margin:0; padding:0 12px; height:28px;"
+                                type="button"
+                                on:click=move |_| state.set(value.get_value())
+                            >
+                                {label}
+                            </button>
+                        }
+                    })
+                    .collect_view()}
+                <button
+                    class="peer__call t-ui-strong"
+                    style="width:auto; margin:0; padding:0 12px; height:28px;"
+                    type="button"
+                    on:click=move |_| remote_speaking.update(|v| *v = !*v)
+                >
+                    "собеседник говорит"
+                </button>
+            </div>
+            <div style="height:520px; border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; background:var(--bg);">
+                <CallPane
+                    state=state.into()
+                    peer_name="Кент"
+                    self_name="Ты"
+                    muted=muted
+                    local_speaking=Signal::derive(|| false)
+                    remote_speaking=remote_speaking
+                    on_mute=Callback::new(move |()| muted.update(|m| *m = !*m))
+                    on_accept=Callback::new(move |()| {
+                        state.set(CallState::Connected { since: js_sys::Date::now() as i64 })
+                    })
+                    on_decline=Callback::new(move |()| state.set(CallState::Idle))
+                    on_hang_up=Callback::new(move |()| state.set(CallState::Idle))
+                />
+            </div>
+            <div style="margin-top:14px; background:var(--bg); padding:10px 0;">
+                <CallOutcome
+                    message=EndReason::Declined.message()
+                    on_dismiss=Callback::new(|()| ())
+                />
+            </div>
+        </div>
+    }
 }
 
 #[component]
@@ -236,6 +311,8 @@ fn ShellCase() -> impl IntoView {
                         peer_name="Кент"
                         self_name="Ты"
                         on_settings=Callback::new(|()| ())
+                        in_call=false
+                        on_call=Callback::new(|()| ())
                     >
                         <div style="padding:26px 22px;">
                             <p class="t-ui" style="color:var(--text-secondary);">
@@ -265,6 +342,10 @@ pub fn Gallery() -> impl IntoView {
 
             <Section title="Shell" note="title 44 · sidebar 264 · main flex 1 — all six connection states">
                 <ShellCase />
+            </Section>
+
+            <Section title="Call" note="плитки r-arch · таймер из since · контролы 46 · входящий вызов">
+                <CallCase />
             </Section>
 
             <Section title="Chat" note="лента 22/18 · gap 15 · группировка < 5 мин · пузыри max 520 · композер h52">

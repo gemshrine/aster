@@ -1,5 +1,6 @@
 mod app;
 mod bridge;
+mod call;
 mod chat;
 mod connection;
 mod ui;

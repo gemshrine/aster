@@ -28,9 +28,16 @@ fn ConnectionIndicator(state: Signal<ConnectionState>) -> impl IntoView {
 }
 
 #[component]
-fn PeerCard(peer_name: String, state: Signal<ConnectionState>) -> impl IntoView {
+fn PeerCard(
+    peer_name: String,
+    state: Signal<ConnectionState>,
+    /// True while a call is already up — no second call to start.
+    in_call: Signal<bool>,
+    on_call: Callback<()>,
+) -> impl IntoView {
     let name = peer_name.clone();
-    let can_call = Signal::derive(move || state.get().peer_online());
+    let online = Signal::derive(move || state.get().peer_online());
+    let can_call = Signal::derive(move || online.get() && !in_call.get());
     view! {
         <div class="peer">
             <div class="peer__row">
@@ -38,19 +45,24 @@ fn PeerCard(peer_name: String, state: Signal<ConnectionState>) -> impl IntoView 
                     name=peer_name
                     size=38.0
                     presence=Signal::derive(move || {
-                        if can_call.get() { Presence::Online } else { Presence::Offline }
+                        if online.get() { Presence::Online } else { Presence::Offline }
                     })
                     ring_bg="var(--bg-panel)"
                 />
                 <div class="peer__text">
                     <span class="t-body-strong">{name}</span>
                     <span class="t-caption">
-                        {move || if can_call.get() { "В сети" } else { "Не в сети" }}
+                        {move || if online.get() { "В сети" } else { "Не в сети" }}
                     </span>
                 </div>
             </div>
-            <button class="peer__call t-ui-strong" type="button" disabled=move || !can_call.get()>
-                "Позвонить"
+            <button
+                class="peer__call t-ui-strong"
+                type="button"
+                disabled=move || !can_call.get()
+                on:click=move |_| on_call.run(())
+            >
+                {move || if in_call.get() { "В звонке" } else { "Позвонить" }}
             </button>
         </div>
     }
@@ -84,6 +96,8 @@ pub fn Shell(
     #[prop(into)] self_name: String,
     /// Opens the connection settings; the title strip is the only way in.
     on_settings: Callback<()>,
+    #[prop(into)] in_call: Signal<bool>,
+    on_call: Callback<()>,
     children: Children,
 ) -> impl IntoView {
     view! {
@@ -102,7 +116,12 @@ pub fn Shell(
             </header>
             <div class="shell__body">
                 <aside class="shell__sidebar">
-                    <PeerCard peer_name=peer_name state=state />
+                    <PeerCard
+                        peer_name=peer_name
+                        state=state
+                        in_call=in_call
+                        on_call=on_call
+                    />
                     <div class="shell__spacer"></div>
                     <SelfPanel self_name=self_name />
                 </aside>
