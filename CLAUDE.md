@@ -92,6 +92,7 @@ cargo install tauri-cli --version "^2" --locked
 - Коммиты: `<scope>: <короткое summary в повелительном наклонении>` (например `signaling: add ICE candidate relay`).
 - Форматирование — `rustfmt` (дефолтный конфиг), линт — `clippy` без warnings в CI.
 - PR должен проходить CI (build + test + clippy + fmt) прежде чем мержится.
+- В описаниях PR, в issues и комментариях на GitHub не добавлять футер «🤖 Generated with Claude Code».
 - Секреты (токены авторизации между двумя клиентами, TURN-креды) никогда не коммитятся — только через `.env`/секреты деплоя, см. `deploy/`.
 
 ## Модель угроз (кратко)
