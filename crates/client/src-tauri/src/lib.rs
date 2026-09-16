@@ -2,5 +2,5 @@
 pub fn run() {
     tauri::Builder::default()
         .run(tauri::generate_context!())
-        .expect("error while running Astor client");
+        .expect("error while running Aster client");
 }

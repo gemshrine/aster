@@ -34,7 +34,7 @@
 
 ```bash
 # на VPS
-git clone <repo> && cd astor/deploy
+git clone <repo> && cd aster/deploy
 cp .env.example .env   # заполнить токены/домен
 docker compose up -d --build
 ```
