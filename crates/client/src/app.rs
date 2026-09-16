@@ -12,6 +12,9 @@ use crate::ui::settings::{SettingsPanel, SettingsView};
 use crate::ui::shell::Shell;
 
 const PEER_NAME: &str = "Кент";
+/// Screenfuls of history: the first load, then one page per scroll to the top.
+const FIRST_PAGE: u32 = 200;
+const OLDER_PAGE: u32 = 100;
 const SELF_NAME: &str = "Ты";
 
 #[derive(serde::Deserialize)]
@@ -136,12 +139,18 @@ pub fn App() -> impl IntoView {
         });
     });
 
+    // History is paged: the newest screenful first, older pages as the reader
+    // scrolls up (spec 0010 `load_history { before, limit }`).
+    let loading_older = RwSignal::new(false);
+    let has_older = RwSignal::new(true);
+
     leptos::task::spawn_local(async move {
         let args = HistoryArgs {
             before: None,
-            limit: 200,
+            limit: FIRST_PAGE,
         };
         if let Ok(history) = bridge::invoke::<_, Vec<CoreMessage>>("load_history", &args).await {
+            has_older.set(history.len() as u32 == FIRST_PAGE);
             messages.update(|messages| {
                 // Upserts that raced the load are newer than the stored copy.
                 let live = std::mem::take(messages);
@@ -151,6 +160,41 @@ pub fn App() -> impl IntoView {
                 }
             });
         }
+    });
+
+    let on_load_older = Callback::new(move |()| {
+        if loading_older.get_untracked() || !has_older.get_untracked() {
+            return;
+        }
+        let Some(oldest) = messages.get_untracked().first().map(|m| m.id.clone()) else {
+            return;
+        };
+        loading_older.set(true);
+        leptos::task::spawn_local(async move {
+            let args = HistoryArgs {
+                before: Some(oldest),
+                limit: OLDER_PAGE,
+            };
+            match bridge::invoke::<_, Vec<CoreMessage>>("load_history", &args).await {
+                Ok(page) => {
+                    has_older.set(page.len() as u32 == OLDER_PAGE);
+                    messages.update(|messages| {
+                        for message in page.into_iter().rev().map(Message::from) {
+                            if !messages.iter().any(|m| m.id == message.id) {
+                                messages.insert(0, message);
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    // Keep `has_older` set: the next scroll may well succeed.
+                    web_sys::console::error_1(
+                        &format!("история не загрузилась: {}", err.message).into(),
+                    );
+                }
+            }
+            loading_older.set(false);
+        });
     });
 
     bridge::listen::<CoreMessage>("message-upserted", move |message| {
@@ -267,6 +311,8 @@ pub fn App() -> impl IntoView {
                                             messages=messages.into()
                                             peer_name=PEER_NAME
                                             self_name=SELF_NAME
+                                            on_load_older=on_load_older
+                                            loading_older=loading_older
                                         />
                                         {move || {
                                             outcome
