@@ -11,6 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 fastrand = "2.5.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 protocol = { version = "0.1.0", path = "../../protocol" }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tauri = "2.11.5"

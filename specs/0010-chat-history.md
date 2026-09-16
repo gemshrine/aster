@@ -45,7 +45,7 @@ CREATE INDEX messages_order ON messages (sent_at, received_at);
 
 Статус своего сообщения только растёт по рангу `sending < sent < queued < delivered`. Ack с меньшим или равным рангом игнорируется: поздний `queued` не откатывает `delivered`, повторный ack не эмитит событие.
 
-`failed` ставится по `chat-rejected { id }` из любого статуса, кроме `delivered`. Выход из `failed` — только `retry_message`.
+`failed` ставится по `chat-rejected { id }` из любого статуса, кроме `delivered`. Выход из `failed` — `retry_message` или реальная доставка: `chat-ack { delivered }` переводит `failed` → `delivered`. Так бывает, когда сообщение ушло дважды (досылка `sent`): одна копия легла в офлайн-очередь, вторая получила `queue_full`, а потом первая всё-таки доставлена.
 
 ### Входящие
 
