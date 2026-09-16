@@ -10,10 +10,12 @@ use uuid::Uuid;
 use crate::core::chat::{Chat, ChatError, Message};
 use crate::core::settings::Settings;
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
+use crate::core::voice::call::{CallError, CallState, VoiceEvent, VoiceHandle};
 
 pub struct AppState {
     pub signaling: SignalingHandle,
     pub chat: Arc<Chat>,
+    pub voice: VoiceHandle,
     pub settings_path: PathBuf,
 }
 
@@ -26,6 +28,18 @@ pub struct CommandError {
 impl From<ChatError> for CommandError {
     fn from(err: ChatError) -> Self {
         CommandError::new(err.code(), err.to_string())
+    }
+}
+
+impl From<CallError> for CommandError {
+    fn from(err: CallError) -> Self {
+        let (code, message) = match err {
+            CallError::InvalidState => ("invalid_state", "not possible in the current call state"),
+            CallError::NotConnected => ("not_connected", "not connected to the server"),
+            CallError::PeerOffline => ("peer_offline", "the other user is offline"),
+            CallError::Failed => ("failed", "could not set up the call"),
+        };
+        CommandError::new(code, message)
     }
 }
 
@@ -108,6 +122,55 @@ pub async fn send_message(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn retry_message(state: State<'_, AppState>, id: Uuid) -> Result<Message, CommandError> {
     Ok(state.chat.retry_message(id).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn start_call(state: State<'_, AppState>) -> Result<(), CommandError> {
+    Ok(state.voice.start_call().await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn accept_call(state: State<'_, AppState>) -> Result<(), CommandError> {
+    Ok(state.voice.accept_call().await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn decline_call(state: State<'_, AppState>) -> Result<(), CommandError> {
+    Ok(state.voice.decline_call().await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn hang_up(state: State<'_, AppState>) -> Result<(), CommandError> {
+    Ok(state.voice.hang_up().await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_muted(state: State<'_, AppState>, muted: bool) -> Result<(), CommandError> {
+    Ok(state.voice.set_muted(muted).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn call_state(state: State<'_, AppState>) -> CallState {
+    state.voice.state()
+}
+
+#[derive(Clone, Serialize)]
+struct AudioError {
+    direction: crate::core::voice::call::AudioDirection,
+    message: String,
+}
+
+pub fn emit_voice(app: &AppHandle, event: VoiceEvent) {
+    let result = match event {
+        VoiceEvent::State(state) => app.emit("call-state", state),
+        VoiceEvent::Audio(status) => app.emit("call-audio", status),
+        VoiceEvent::AudioError { direction, message } => {
+            app.emit("call-audio-error", AudioError { direction, message })
+        }
+    };
+    if let Err(err) = result {
+        eprintln!("failed to emit event: {err}");
+    }
 }
 
 #[derive(Clone, Serialize)]
