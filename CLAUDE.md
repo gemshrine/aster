@@ -59,7 +59,7 @@ gavno-voice/
 ## Команды
 
 ```bash
-# сборка всего workspace
+# сборка всего workspace (protocol, signaling-server, client/src-tauri)
 cargo build --workspace
 
 # тесты
@@ -72,8 +72,19 @@ cargo fmt --all -- --check
 # запуск сервера сигнализации локально
 cargo run -p signaling-server
 
-# запуск клиента (Tauri dev)
-cd crates/client && cargo tauri dev
+# запуск клиента (Tauri dev) — фронтенд (crates/client) не входит в workspace,
+# т.к. это wasm-крейт, собираемый отдельно через trunk
+cd crates/client
+cargo fmt -- --check && cargo clippy --all-targets -- -D warnings
+cargo tauri dev
+```
+
+### Первоначальная настройка окружения для клиента
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install trunk --locked
+cargo install tauri-cli --version "^2" --locked
 ```
 
 ## Конвенции

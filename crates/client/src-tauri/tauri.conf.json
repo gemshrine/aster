@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "gavno-voice",
+  "version": "0.1.0",
+  "identifier": "dev.gemshrine.gavno-voice",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "trunk serve",
+    "beforeBuildCommand": "trunk build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "gavno-voice",
+        "width": 900,
+        "height": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  }
+}
