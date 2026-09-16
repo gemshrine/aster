@@ -1,0 +1,30 @@
+name: Spec
+description: Новая или изменённая спека (spec-driven development)
+title: "[spec]: "
+labels: ["spec"]
+body:
+  - type: input
+    id: number
+    attributes:
+      label: Номер спеки
+      placeholder: "0007"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Проблема / контекст
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое решение
+    validations:
+      required: true
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Открытые вопросы
+    validations:
+      required: false

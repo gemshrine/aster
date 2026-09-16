@@ -1,0 +1,37 @@
+name: Feature / Task
+description: Единица работы для issue-driven разработки
+title: "[feature]: "
+labels: []
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что нужно сделать
+      description: Короткое описание задачи
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Зачем
+      description: Контекст, мотивация, ссылка на связанный issue/спеку
+    validations:
+      required: false
+  - type: input
+    id: spec
+    attributes:
+      label: Связанная спека
+      description: Ссылка на файл в specs/, если применимо
+      placeholder: specs/0002-signaling-protocol.md
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Критерии готовности
+      description: Как понять, что задача сделана
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
