@@ -3,6 +3,7 @@ mod bridge;
 mod call;
 mod chat;
 mod connection;
+mod sound;
 mod ui;
 
 fn main() {

@@ -11,7 +11,16 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde-wasm-bindgen = "0.6.5"
 wasm-bindgen = "0.2.128"
 wasm-bindgen-futures = "0.4.78"
-web-sys = { version = "0.3.105", features = ["console"] }
+web-sys = { version = "0.3.105", features = [
+    "console",
+    "AudioContext",
+    "AudioContextState",
+    "AudioDestinationNode",
+    "AudioParam",
+    "GainNode",
+    "OscillatorNode",
+    "OscillatorType",
+] }
 
 [dev-dependencies]
 serde_json = "1.0.151"
