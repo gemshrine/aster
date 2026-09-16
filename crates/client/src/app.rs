@@ -151,7 +151,9 @@ pub fn App() -> impl IntoView {
         });
     });
 
-    let offline = Signal::derive(move || !state.get().peer_online());
+    // An offline peer still gets messages through the server's queue, so
+    // only a dead link disables the composer (spec 0004).
+    let offline = Signal::derive(move || !state.get().can_send());
     let settings_open = Signal::derive(move || {
         show_settings.get() || matches!(state.get(), ConnectionState::NotConfigured)
     });

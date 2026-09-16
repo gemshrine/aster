@@ -85,6 +85,13 @@ impl ConnectionState {
         matches!(self, Self::Failed { .. } | Self::NotConfigured)
     }
 
+    /// Whether the composer accepts input: the link to the server is up. A
+    /// peer who is offline is not a reason to block typing — the server
+    /// queues the message for them (spec 0004).
+    pub fn can_send(&self) -> bool {
+        matches!(self, Self::Connected { .. })
+    }
+
     pub fn peer_online(&self) -> bool {
         matches!(
             self,
@@ -160,6 +167,21 @@ mod tests {
         assert_eq!(secs(4000), "4 с");
         assert_eq!(secs(4500), "5 с");
         assert_eq!(secs(200), "1 с");
+    }
+
+    #[test]
+    fn sending_needs_the_server_not_the_peer() {
+        assert!(ConnectionState::Connected {
+            user_id: "k".into(),
+            peer_online: false
+        }
+        .can_send());
+        assert!(!ConnectionState::Reconnecting {
+            attempt: 1,
+            retry_in_ms: 1000
+        }
+        .can_send());
+        assert!(!ConnectionState::NotConfigured.can_send());
     }
 
     #[test]
