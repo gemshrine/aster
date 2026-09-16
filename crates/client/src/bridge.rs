@@ -6,7 +6,6 @@
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 
 #[wasm_bindgen]
 extern "C" {
@@ -92,25 +91,4 @@ pub fn listen<T: DeserializeOwned + 'static>(
             web_sys::console::error_1(&err);
         }
     });
-}
-
-/// UUID v4 from the browser's crypto, which both webviews provide.
-pub fn uuid() -> String {
-    let fallback = || format!("{:x}", js_sys::Date::now() as u64);
-    let Some(window) = web_sys::window() else {
-        return fallback();
-    };
-    let crypto = match js_sys::Reflect::get(&window, &JsValue::from_str("crypto")) {
-        Ok(crypto) if !crypto.is_undefined() => crypto,
-        _ => return fallback(),
-    };
-    let method = match js_sys::Reflect::get(&crypto, &JsValue::from_str("randomUUID")) {
-        Ok(method) => method,
-        Err(_) => return fallback(),
-    };
-    method
-        .dyn_ref::<js_sys::Function>()
-        .and_then(|method| method.call0(&crypto).ok())
-        .and_then(|value| value.as_string())
-        .unwrap_or_else(fallback)
 }

@@ -1,16 +1,19 @@
 //! Tauri commands and events, see `specs/0009-client-core.md`.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
+use crate::core::chat::{Chat, ChatError, Message};
 use crate::core::settings::Settings;
-use crate::core::signaling::{AckStatus, ConnectionState, CoreEvent, SendError, SignalingHandle};
+use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 
 pub struct AppState {
     pub signaling: SignalingHandle,
+    pub chat: Arc<Chat>,
     pub settings_path: PathBuf,
 }
 
@@ -18,6 +21,12 @@ pub struct AppState {
 pub struct CommandError {
     code: &'static str,
     message: String,
+}
+
+impl From<ChatError> for CommandError {
+    fn from(err: ChatError) -> Self {
+        CommandError::new(err.code(), err.to_string())
+    }
 }
 
 impl CommandError {
@@ -80,20 +89,25 @@ pub fn connection_state(state: State<'_, AppState>) -> ConnectionState {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn send_chat(
+pub fn load_history(
     state: State<'_, AppState>,
-    id: Uuid,
+    before: Option<Uuid>,
+    limit: u32,
+) -> Result<Vec<Message>, CommandError> {
+    Ok(state.chat.load_history(before, limit)?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn send_message(
+    state: State<'_, AppState>,
     body: String,
-    sent_at: i64,
-) -> Result<(), CommandError> {
-    state
-        .signaling
-        .send_chat(id, body, sent_at)
-        .await
-        .map_err(|err| match err {
-            SendError::NotConnected => CommandError::new("not_connected", "not connected"),
-            SendError::Io => CommandError::new("io", "connection lost while sending"),
-        })
+) -> Result<Message, CommandError> {
+    Ok(state.chat.send_message(&body).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn retry_message(state: State<'_, AppState>, id: Uuid) -> Result<Message, CommandError> {
+    Ok(state.chat.retry_message(id).await?)
 }
 
 #[derive(Clone, Serialize)]
@@ -101,25 +115,10 @@ struct PeerStatus {
     online: bool,
 }
 
-#[derive(Clone, Serialize)]
-struct ChatMessage {
-    id: Uuid,
-    from: String,
-    body: String,
-    sent_at: i64,
-}
-
-#[derive(Clone, Serialize)]
-struct ChatAck {
-    id: Uuid,
-    status: AckStatus,
-}
-
-#[derive(Clone, Serialize)]
-struct ChatRejected {
-    id: Option<Uuid>,
-    code: protocol::ErrorCode,
-    message: String,
+pub fn emit_upsert(app: &AppHandle, message: Message) {
+    if let Err(err) = app.emit("message-upserted", message) {
+        eprintln!("failed to emit event: {err}");
+    }
 }
 
 /// Forwards UI-facing core events to every window.
@@ -127,24 +126,10 @@ pub fn emit(app: &AppHandle, event: CoreEvent) {
     let result = match event {
         CoreEvent::State(state) => app.emit("connection-state", state),
         CoreEvent::PeerStatus { online } => app.emit("peer-status", PeerStatus { online }),
-        CoreEvent::ChatMessage {
-            id,
-            from,
-            body,
-            sent_at,
-        } => app.emit(
-            "chat-message",
-            ChatMessage {
-                id,
-                from,
-                body,
-                sent_at,
-            },
-        ),
-        CoreEvent::ChatAck { id, status } => app.emit("chat-ack", ChatAck { id, status }),
-        CoreEvent::ChatRejected { id, code, message } => {
-            app.emit("chat-rejected", ChatRejected { id, code, message })
-        }
+        // Chat events reach the UI as `message-upserted` via the history.
+        CoreEvent::ChatMessage { .. }
+        | CoreEvent::ChatAck { .. }
+        | CoreEvent::ChatRejected { .. } => Ok(()),
         CoreEvent::Signal(_) => Ok(()),
         CoreEvent::ServerError { code, message } => {
             eprintln!("signaling-server error {code:?}: {message}");

@@ -17,37 +17,65 @@ struct PeerStatus {
     online: bool,
 }
 
+/// A message as the core's history emits it (spec 0010).
 #[derive(serde::Deserialize)]
-struct IncomingMessage {
+struct CoreMessage {
     id: String,
+    direction: Direction,
     body: String,
     sent_at: i64,
-}
-
-#[derive(serde::Deserialize)]
-struct ChatAck {
-    id: String,
-    status: AckStatus,
+    status: Option<CoreStatus>,
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum AckStatus {
-    Delivered,
-    Queued,
+enum Direction {
+    Out,
+    In,
 }
 
-#[derive(serde::Deserialize)]
-struct ChatRejected {
-    id: Option<String>,
-    message: String,
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CoreStatus {
+    Sending,
+    Sent,
+    Queued,
+    Delivered,
+    Failed,
+}
+
+impl From<CoreMessage> for Message {
+    fn from(core: CoreMessage) -> Self {
+        Message {
+            id: core.id,
+            author: match core.direction {
+                Direction::Out => Author::Me,
+                Direction::In => Author::Peer,
+            },
+            body: core.body,
+            sent_at: core.sent_at,
+            status: core.status.map(|status| match status {
+                CoreStatus::Sending => Status::Sending,
+                CoreStatus::Sent => Status::Sent,
+                CoreStatus::Queued => Status::Queued,
+                CoreStatus::Delivered => Status::Delivered,
+                CoreStatus::Failed => Status::Rejected {
+                    message: "Не доставлено — очередь собеседника переполнена".into(),
+                },
+            }),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct HistoryArgs {
+    before: Option<String>,
+    limit: u32,
 }
 
 #[derive(serde::Serialize)]
 struct SendArgs {
-    id: String,
     body: String,
-    sent_at: i64,
 }
 
 #[component]
@@ -88,72 +116,37 @@ pub fn App() -> impl IntoView {
         });
     });
 
-    bridge::listen::<IncomingMessage>("chat-message", move |incoming| {
-        messages.update(|messages| {
-            if messages.iter().any(|m| m.id == incoming.id) {
-                return; // a redelivered message from the offline queue
-            }
-            messages.push(Message {
-                id: incoming.id,
-                author: Author::Peer,
-                body: incoming.body,
-                sent_at: incoming.sent_at,
-                status: None,
-            });
-        });
-    });
-
-    bridge::listen::<ChatAck>("chat-ack", move |ack| {
-        let status = match ack.status {
-            AckStatus::Delivered => Status::Delivered,
-            AckStatus::Queued => Status::Queued,
+    leptos::task::spawn_local(async move {
+        let args = HistoryArgs {
+            before: None,
+            limit: 200,
         };
-        set_status(messages, &ack.id, status);
-    });
-
-    bridge::listen::<ChatRejected>("chat-rejected", move |rejected| {
-        // A rejection with no id is server trouble at large, which the
-        // connection indicator already reports.
-        if let Some(id) = rejected.id {
-            set_status(
-                messages,
-                &id,
-                Status::Rejected {
-                    message: rejected.message,
-                },
-            );
+        if let Ok(history) = bridge::invoke::<_, Vec<CoreMessage>>("load_history", &args).await {
+            messages.update(|messages| {
+                // Upserts that raced the load are newer than the stored copy.
+                let live = std::mem::take(messages);
+                *messages = history.into_iter().map(Message::from).collect();
+                for message in live {
+                    upsert(messages, message);
+                }
+            });
         }
     });
 
+    bridge::listen::<CoreMessage>("message-upserted", move |message| {
+        messages.update(|messages| upsert(messages, message.into()));
+    });
+
     let on_send = Callback::new(move |body: String| {
-        let id = bridge::uuid();
-        let sent_at = js_sys::Date::now() as i64;
-        messages.update(|messages| {
-            messages.push(Message {
-                id: id.clone(),
-                author: Author::Me,
-                body: body.clone(),
-                sent_at,
-                status: Some(Status::Sending),
-            });
-        });
         leptos::task::spawn_local(async move {
-            let args = SendArgs {
-                id: id.clone(),
-                body,
-                sent_at,
-            };
-            let result: Result<(), CommandError> = bridge::invoke("send_chat", &args).await;
-            match result {
-                // The core took it; delivery is confirmed later by chat-ack.
-                Ok(()) => set_status(messages, &id, Status::Sent),
-                Err(err) => set_status(
-                    messages,
-                    &id,
-                    Status::Rejected {
-                        message: err.message,
-                    },
-                ),
+            // The core stores the message and announces it via
+            // `message-upserted`; the reply only matters on refusal.
+            let result: Result<CoreMessage, CommandError> =
+                bridge::invoke("send_message", &SendArgs { body }).await;
+            if let Err(err) = result {
+                web_sys::console::error_1(
+                    &format!("сообщение не отправлено: {}", err.message).into(),
+                );
             }
         });
     });
@@ -201,11 +194,15 @@ pub fn App() -> impl IntoView {
     }
 }
 
-/// Moves one message to a new delivery status, by id.
-fn set_status(messages: RwSignal<Vec<Message>>, id: &str, status: Status) {
-    messages.update(|messages| {
-        if let Some(message) = messages.iter_mut().find(|m| m.id == id) {
-            message.status = Some(status);
-        }
-    });
+/// Replaces a message by id, or appends it in chronological order.
+fn upsert(messages: &mut Vec<Message>, message: Message) {
+    if let Some(existing) = messages.iter_mut().find(|m| m.id == message.id) {
+        *existing = message;
+        return;
+    }
+    let at = messages
+        .iter()
+        .rposition(|m| m.sent_at <= message.sent_at)
+        .map_or(0, |i| i + 1);
+    messages.insert(at, message);
 }
