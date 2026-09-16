@@ -8,7 +8,11 @@ use signaling_server::turn::TurnConfig;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt::init();
+    // `fmt::init()` with the env-filter feature drops everything below ERROR
+    // when RUST_LOG is unset.
+    let filter = tracing_subscriber::EnvFilter::try_from_env("RUST_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let users = match std::env::var("ASTER_USERS")
         .map_err(|_| "ASTER_USERS is not set (expected `id:token,id:token`)".to_string())
