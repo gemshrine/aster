@@ -10,7 +10,7 @@ use protocol::{ClientMessage, ErrorCode, PROTOCOL_VERSION, RejectReason, ServerM
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{Instant, timeout, timeout_at};
 
-use crate::hub::{Hub, Outbound};
+use crate::hub::{ChatMessage, ChatOutcome, Hub, Outbound};
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -109,7 +109,7 @@ async fn handshake(
 async fn serve(
     stream: &mut SplitStream<WebSocket>,
     tx: &UnboundedSender<Outbound>,
-    _hub: &Hub,
+    hub: &Hub,
     user: &UserId,
 ) {
     loop {
@@ -125,8 +125,21 @@ async fn serve(
             ClientMessage::Hello { .. } => {
                 send_error(tx, ErrorCode::MalformedMessage, "already authenticated")
             }
-            ClientMessage::Signal { .. } | ClientMessage::ChatMessage { .. } => {
-                tracing::debug!(user = %user.0, "relay not implemented yet");
+            ClientMessage::Signal { payload } => {
+                if !hub.relay_signal(user, payload) {
+                    send_error(tx, ErrorCode::PeerOffline, "the other user is offline");
+                }
+            }
+            ClientMessage::ChatMessage { id, body, sent_at } => {
+                let ack = match hub.send_chat(user, ChatMessage { id, body, sent_at }) {
+                    ChatOutcome::Delivered => ServerMessage::ChatDelivered { id },
+                    ChatOutcome::Queued => ServerMessage::ChatQueued { id },
+                    ChatOutcome::QueueFull => ServerMessage::Error {
+                        code: ErrorCode::QueueFull,
+                        message: format!("offline queue is full, message {id} dropped"),
+                    },
+                };
+                let _ = tx.send(Outbound::Message(ack));
             }
         }
     }

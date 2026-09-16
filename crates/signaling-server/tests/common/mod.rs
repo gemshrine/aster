@@ -7,7 +7,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage};
 use signaling_server::config::Users;
-use signaling_server::hub::Hub;
+use signaling_server::hub::{Hub, QueueLimits};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
@@ -18,11 +18,16 @@ pub const BOB_TOKEN: &str = "bob-token-0123456789abcdef0123456789abcdef00";
 const RECV_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub async fn spawn_server() -> SocketAddr {
+    spawn_server_with_limits(QueueLimits::default()).await
+}
+
+pub async fn spawn_server_with_limits(limits: QueueLimits) -> SocketAddr {
     let users = Users::parse(&format!("alice:{ALICE_TOKEN},bob:{BOB_TOKEN}")).unwrap();
+    let hub = Arc::new(Hub::with_limits(users, limits));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, signaling_server::app(Arc::new(Hub::new(users))))
+        axum::serve(listener, signaling_server::app(hub))
             .await
             .unwrap();
     });
