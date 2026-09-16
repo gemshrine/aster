@@ -154,6 +154,30 @@ impl Peer {
         let len = (ms * 48).min(played.len());
         played[played.len() - len..].to_vec()
     }
+
+    /// Waits until the tail of the speaker signal is a clean `freq` tone.
+    ///
+    /// The first tail after `connected` can still hold silence, PLC frames or
+    /// a phase jump from the jitter buffer filling up, which drags the
+    /// Goertzel ratio below the threshold. Sampling again a moment later
+    /// rather than once at a fixed delay keeps the assertion strict — the
+    /// tone must arrive clean — without depending on how fast the machine
+    /// running the test happens to be.
+    async fn wait_for_tone(&self, freq: f32, ms: usize) -> Vec<f32> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let tail = self.played_tail(ms);
+            let (level, ratio) = (level_dbfs(&tail), tone_ratio(&tail, freq));
+            if level > -20.0 && ratio > 0.5 {
+                return tail;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no clean {freq} Hz tone within 5 s: {level} dBFS, ratio {ratio}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }
 
 fn test_config() -> CallConfig {
@@ -205,27 +229,21 @@ async fn call_connects_and_audio_flows_both_ways() {
         .await;
     tokio::time::sleep(Duration::from_millis(600)).await;
 
-    let at_bob = bob.played_tail(400);
+    // Each peer must hear the other's tone and only that tone: alice sends
+    // 440 Hz, bob 1000 Hz.
+    let at_bob = bob.wait_for_tone(440.0, 400).await;
     assert!(
-        level_dbfs(&at_bob) > -20.0,
-        "bob hears {} dBFS",
-        level_dbfs(&at_bob)
+        tone_ratio(&at_bob, 1000.0) < 0.1,
+        "1000 Hz leaked into bob's speaker: {}",
+        tone_ratio(&at_bob, 1000.0)
     );
-    assert!(
-        tone_ratio(&at_bob, 440.0) > 0.5,
-        "440 Hz at bob: {}",
-        tone_ratio(&at_bob, 440.0)
-    );
-    assert!(tone_ratio(&at_bob, 1000.0) < 0.1);
 
-    let at_alice = alice.played_tail(400);
-    assert!(level_dbfs(&at_alice) > -20.0);
+    let at_alice = alice.wait_for_tone(1000.0, 400).await;
     assert!(
-        tone_ratio(&at_alice, 1000.0) > 0.5,
-        "1000 Hz at alice: {}",
-        tone_ratio(&at_alice, 1000.0)
+        tone_ratio(&at_alice, 440.0) < 0.1,
+        "440 Hz leaked into alice's speaker: {}",
+        tone_ratio(&at_alice, 440.0)
     );
-    assert!(tone_ratio(&at_alice, 440.0) < 0.1);
 
     alice.voice.hang_up().await.unwrap();
     alice.wait_ended(EndReason::Hangup).await;
