@@ -2,8 +2,8 @@ mod common;
 
 use std::time::Duration;
 
-use common::{ALICE_TOKEN, BOB_TOKEN, Client, spawn_server};
-use protocol::{ErrorCode, PROTOCOL_VERSION, RejectReason, ServerMessage, UserId};
+use common::{ALICE_TOKEN, BOB_TOKEN, Client, assert_welcome, spawn_server};
+use protocol::{ErrorCode, PROTOCOL_VERSION, RejectReason, ServerMessage};
 
 #[tokio::test]
 async fn health_check_returns_ok() {
@@ -32,13 +32,7 @@ async fn http_get(addr: std::net::SocketAddr, path: &str) -> String {
 async fn valid_token_gets_welcome() {
     let addr = spawn_server().await;
     let (_alice, welcome) = Client::login(addr, ALICE_TOKEN).await;
-    assert_eq!(
-        welcome,
-        ServerMessage::Welcome {
-            user_id: UserId("alice".into()),
-            peer_online: false,
-        }
-    );
+    assert_welcome(&welcome, "alice", false);
 }
 
 #[tokio::test]
@@ -104,13 +98,7 @@ async fn presence_follows_peer_connect_and_disconnect() {
     let (mut alice, _) = Client::login(addr, ALICE_TOKEN).await;
 
     let (bob, welcome) = Client::login(addr, BOB_TOKEN).await;
-    assert_eq!(
-        welcome,
-        ServerMessage::Welcome {
-            user_id: UserId("bob".into()),
-            peer_online: true,
-        }
-    );
+    assert_welcome(&welcome, "bob", true);
     assert_eq!(
         alice.recv().await,
         ServerMessage::PeerStatus { online: true }
@@ -134,13 +122,7 @@ async fn new_session_replaces_old_one() {
     );
 
     let (_alice_new, welcome) = Client::login(addr, ALICE_TOKEN).await;
-    assert_eq!(
-        welcome,
-        ServerMessage::Welcome {
-            user_id: UserId("alice".into()),
-            peer_online: true,
-        }
-    );
+    assert_welcome(&welcome, "alice", true);
 
     assert!(matches!(
         alice_old.recv().await,
@@ -153,4 +135,34 @@ async fn new_session_replaces_old_one() {
 
     // Alice never went offline from Bob's point of view.
     assert_eq!(bob.try_recv(Duration::from_millis(300)).await, None);
+}
+
+#[tokio::test]
+async fn welcome_carries_ice_servers_with_turn_credentials() {
+    let addr = spawn_server().await;
+    let (_alice, welcome) = Client::login(addr, ALICE_TOKEN).await;
+    let ServerMessage::Welcome { ice_servers, .. } = welcome else {
+        unreachable!()
+    };
+
+    assert_eq!(ice_servers.len(), 2);
+    assert_eq!(ice_servers[0].urls, ["stun:turn.test:3478"]);
+    let relay = &ice_servers[1];
+    assert!(
+        relay
+            .urls
+            .iter()
+            .all(|url| url.starts_with("turn:turn.test:3478"))
+    );
+
+    let username = relay.username.as_deref().unwrap();
+    let (expiry, user) = username.split_once(':').unwrap();
+    assert_eq!(user, "alice");
+    let expiry: u64 = expiry.parse().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!(expiry > now + 60 * 60, "credentials should outlive a call");
+    assert!(relay.credential.as_deref().is_some_and(|c| !c.is_empty()));
 }

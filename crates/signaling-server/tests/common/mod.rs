@@ -8,12 +8,14 @@ use futures_util::{SinkExt, StreamExt};
 use protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage};
 use signaling_server::config::Users;
 use signaling_server::hub::{Hub, QueueLimits};
+use signaling_server::turn::TurnConfig;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 pub const ALICE_TOKEN: &str = "alice-token-0123456789abcdef0123456789abcdef";
 pub const BOB_TOKEN: &str = "bob-token-0123456789abcdef0123456789abcdef00";
+pub const TURN_SECRET: &str = "turn-secret-0123456789abcdef0123456789abcdef";
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -23,7 +25,8 @@ pub async fn spawn_server() -> SocketAddr {
 
 pub async fn spawn_server_with_limits(limits: QueueLimits) -> SocketAddr {
     let users = Users::parse(&format!("alice:{ALICE_TOKEN},bob:{BOB_TOKEN}")).unwrap();
-    let hub = Arc::new(Hub::with_limits(users, limits));
+    let turn = TurnConfig::new("turn.test", TURN_SECRET).unwrap();
+    let hub = Arc::new(Hub::with_limits(users, limits).with_turn(turn));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -106,5 +109,19 @@ impl Client {
 
     pub async fn close(mut self) {
         let _ = self.ws.close(None).await;
+    }
+}
+
+pub fn assert_welcome(msg: &ServerMessage, user: &str, peer_online: bool) {
+    match msg {
+        ServerMessage::Welcome {
+            user_id,
+            peer_online: online,
+            ..
+        } => {
+            assert_eq!(user_id.0, user);
+            assert_eq!(*online, peer_online, "peer_online");
+        }
+        other => panic!("expected welcome, got {other:?}"),
     }
 }

@@ -1,13 +1,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use protocol::{ErrorCode, ServerMessage, SignalPayload, UserId};
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
 use crate::config::Users;
+use crate::turn::TurnConfig;
 
 /// Instructions for a connection's writer task.
 #[derive(Debug)]
@@ -66,6 +67,7 @@ struct State {
 pub struct Hub {
     users: Users,
     limits: QueueLimits,
+    turn: Option<TurnConfig>,
     state: Mutex<State>,
     next_conn_id: AtomicU64,
 }
@@ -79,9 +81,15 @@ impl Hub {
         Self {
             users,
             limits,
+            turn: None,
             state: Mutex::new(State::default()),
             next_conn_id: AtomicU64::new(1),
         }
+    }
+
+    pub fn with_turn(mut self, turn: TurnConfig) -> Self {
+        self.turn = Some(turn);
+        self
     }
 
     pub fn authenticate(&self, token: &str) -> Option<UserId> {
@@ -99,6 +107,11 @@ impl Hub {
         let _ = tx.send(Outbound::Message(ServerMessage::Welcome {
             user_id: user.clone(),
             peer_online: state.sessions.contains_key(peer),
+            ice_servers: self
+                .turn
+                .as_ref()
+                .map(|turn| turn.ice_servers(user, SystemTime::now()))
+                .unwrap_or_default(),
         }));
 
         let now = Instant::now();

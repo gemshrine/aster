@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Bump on any wire-incompatible change to the signaling protocol.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Identifier of one of the two configured users.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -42,6 +42,9 @@ pub enum ServerMessage {
     Welcome {
         user_id: UserId,
         peer_online: bool,
+        /// STUN/TURN servers for `RTCPeerConnection`; TURN credentials are
+        /// short-lived, a reconnect yields fresh ones.
+        ice_servers: Vec<IceServer>,
     },
     /// Handshake failed; the server closes the connection afterwards.
     Rejected {
@@ -71,6 +74,16 @@ pub enum ServerMessage {
         code: ErrorCode,
         message: String,
     },
+}
+
+/// Mirrors WebRTC's `RTCIceServer`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,6 +187,18 @@ mod tests {
             ServerMessage::Welcome {
                 user_id: UserId("alice".into()),
                 peer_online: true,
+                ice_servers: vec![
+                    IceServer {
+                        urls: vec!["stun:turn.example.com:3478".into()],
+                        username: None,
+                        credential: None,
+                    },
+                    IceServer {
+                        urls: vec!["turn:turn.example.com:3478?transport=udp".into()],
+                        username: Some("1700000000:alice".into()),
+                        credential: Some("c2VjcmV0".into()),
+                    },
+                ],
             },
             ServerMessage::Rejected {
                 reason: RejectReason::InvalidToken,
@@ -255,10 +280,30 @@ mod tests {
         let welcome = ServerMessage::Welcome {
             user_id: UserId("alice".into()),
             peer_online: false,
+            ice_servers: vec![
+                IceServer {
+                    urls: vec!["stun:h:3478".into()],
+                    username: None,
+                    credential: None,
+                },
+                IceServer {
+                    urls: vec!["turn:h:3478?transport=udp".into()],
+                    username: Some("1:alice".into()),
+                    credential: Some("c".into()),
+                },
+            ],
         };
         assert_eq!(
             serde_json::to_value(&welcome).unwrap(),
-            json!({"type": "welcome", "user_id": "alice", "peer_online": false})
+            json!({
+                "type": "welcome",
+                "user_id": "alice",
+                "peer_online": false,
+                "ice_servers": [
+                    {"urls": ["stun:h:3478"]},
+                    {"urls": ["turn:h:3478?transport=udp"], "username": "1:alice", "credential": "c"}
+                ]
+            })
         );
     }
 
