@@ -82,13 +82,23 @@ pub fn Shell(
     state: Signal<ConnectionState>,
     #[prop(into)] peer_name: String,
     #[prop(into)] self_name: String,
+    /// Opens the connection settings; the title strip is the only way in.
+    on_settings: Callback<()>,
     children: Children,
 ) -> impl IntoView {
     view! {
         <div class="shell">
             <header class="shell__title">
                 <span class="t-ui-strong shell__brand">"Aster"</span>
-                <ConnectionIndicator state=state />
+                <div class="shell__title-right">
+                    <ConnectionIndicator state=state />
+                    <IconButton
+                        icon=Icon::Edit
+                        label="Настройки подключения"
+                        kind=IconButtonKind::Sm
+                        on_click=on_settings
+                    />
+                </div>
             </header>
             <div class="shell__body">
                 <aside class="shell__sidebar">
