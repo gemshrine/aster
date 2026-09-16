@@ -1,0 +1,182 @@
+/* Message list and composer — spec 0008, artboard "Direct message". */
+
+.msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  flex: 1;
+  min-height: 0;
+  padding: 18px 22px 8px;
+  overflow-y: auto;
+}
+
+.msg-list__empty {
+  margin: auto;
+  color: var(--text-tertiary);
+}
+
+.msg-group {
+  display: flex;
+  gap: 13px;
+  max-width: 720px;
+}
+
+/* our own messages hug the other edge, avatar last */
+.msg-group--out {
+  flex-direction: row-reverse;
+  margin-left: auto;
+}
+
+.msg-group__body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.msg-group--out .msg-group__body {
+  align-items: flex-end;
+}
+
+.msg-group__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.msg-group__bubbles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.msg-group--out .msg-group__bubbles {
+  align-items: flex-end;
+}
+
+.msg-group__status {
+  color: var(--text-tertiary);
+}
+
+.msg-group__status--rejected {
+  color: var(--danger);
+}
+
+/* bubbles — 18px round, 6px on the corner facing the sender when stacked */
+
+.bubble {
+  max-width: 520px;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: var(--bg-panel-2);
+  color: var(--text-message);
+  overflow-wrap: anywhere;
+}
+
+.bubble--out {
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+.bubble:not(.bubble--first) {
+  border-top-left-radius: 6px;
+}
+
+.bubble:not(.bubble--last) {
+  border-bottom-left-radius: 6px;
+}
+
+.bubble--out:not(.bubble--first) {
+  border-top-left-radius: 18px;
+  border-top-right-radius: 6px;
+}
+
+.bubble--out:not(.bubble--last) {
+  border-bottom-left-radius: 18px;
+  border-bottom-right-radius: 6px;
+}
+
+/* composer */
+
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 52px;
+  margin: 0 22px 20px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg-input);
+  transition: opacity var(--dur) var(--ease);
+}
+
+.composer--disabled {
+  opacity: 0.55;
+}
+
+.composer__input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.composer__input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.composer__send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: #1b1522;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+.composer__send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 80%, #fff);
+}
+
+.composer__send:disabled {
+  background: var(--bg-panel-2);
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
+/* day divider */
+
+.day-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-tertiary);
+}
+
+.day-divider::before,
+.day-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* the chat pane fills the shell's main area: list scrolls, composer pinned */
+
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
