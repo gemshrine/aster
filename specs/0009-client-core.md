@@ -73,15 +73,17 @@ connected ──Error{session_replaced}──► failed{session_replaced}
 | `connect` | — | `()`; из `disconnected`/`failed` |
 | `disconnect` | — | `()` |
 | `connection_state` | — | `ConnectionState` (текущее, для первого рендера) |
-| `send_chat` | `{ id: uuid, body: string, sent_at: i64 }` | `()` |
+| ~~`send_chat`~~ | — | заменена на `send_message` из `0010` |
 
 Ошибка команды — `{ code, message }`, `code`: `invalid_settings`, `not_configured`, `not_connected`, `io`.
 
-`send_chat` не ретраит и не хранит сообщения: при `not_connected` UI/чат (#6) оставляет сообщение в статусе `Sending` и досылает после `connected`.
+Отправка, хранение и досылка сообщений — `0010`. Внутренний `SignalingHandle::send_chat` не ретраит и не хранит сообщения.
 
 ### События Tauri (ядро → UI)
 
 Все события исходят из одного актора и приходят в UI в порядке возникновения.
+
+`chat-message`, `chat-ack`, `chat-rejected` ниже — внутренние события ядра: их потребляет история (`0010`), в UI эмитится только `message-upserted`.
 
 | Событие | Payload |
 |---|---|
@@ -94,6 +96,8 @@ connected ──Error{session_replaced}──► failed{session_replaced}
 **Presence (#33).** Каждое `connection-state { state: "connected" }` несёт актуальный `peer_online`: при `PeerStatus` от сервера ядро сначала эмитит обновлённое `connection-state`, затем `peer-status` с тем же значением. Устаревшего `connected` после свежего `peer-status` не бывает, UI может брать presence из любого из двух событий; `peer-status` — удобство для подписчиков, которым не нужно всё состояние.
 
 ### Статусы сообщений и дедупликация (#32)
+
+Реализуется слоем истории — `0010`.
 
 Соответствие сигналов ядра статусам из `0004`:
 
