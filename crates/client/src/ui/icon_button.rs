@@ -38,16 +38,18 @@ pub fn IconButton(
     icon: Icon,
     /// Accessible name — every icon button is unlabelled visually.
     label: &'static str,
-    #[prop(default = IconButtonKind::Default)] kind: IconButtonKind,
+    /// Takes a plain kind or a signal, so a toggle can flip it live.
+    #[prop(optional, into)]
+    kind: Signal<IconButtonKind>,
     #[prop(default = false)] disabled: bool,
     #[prop(optional)] on_click: Option<Callback<()>>,
 ) -> impl IntoView {
-    let (box_size, icon_size) = kind.size();
+    let sizes = Signal::derive(move || kind.get().size());
     view! {
         <button
             type="button"
-            class=kind.class()
-            style=format!("--btn-size:{box_size}px")
+            class=move || kind.get().class()
+            style=move || format!("--btn-size:{}px", sizes.get().0)
             aria-label=label
             title=label
             disabled=disabled
@@ -57,7 +59,7 @@ pub fn IconButton(
                 }
             }
         >
-            <IconView icon=icon size=icon_size />
+            <IconView icon=icon size=Signal::derive(move || sizes.get().1) />
         </button>
     }
 }

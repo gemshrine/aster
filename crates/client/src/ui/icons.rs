@@ -115,19 +115,20 @@ impl Icon {
 #[component]
 pub fn IconView(
     icon: Icon,
-    #[prop(default = 18.0)] size: f64,
+    #[prop(default = 18.0.into(), into)] size: Signal<f64>,
     #[prop(optional)] stroke: Option<f64>,
 ) -> impl IntoView {
-    let stroke = stroke.unwrap_or(if size < 16.0 { 1.8 } else { 1.6 });
+    let stroke =
+        Signal::derive(move || stroke.unwrap_or(if size.get() < 16.0 { 1.8 } else { 1.6 }));
     view! {
         <svg
             xmlns="http://www.w3.org/2000/svg"
-            width=size
-            height=size
+            width=move || size.get()
+            height=move || size.get()
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            stroke-width=stroke
+            stroke-width=move || stroke.get()
             stroke-linecap="round"
             stroke-linejoin="round"
             aria-hidden="true"
