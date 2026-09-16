@@ -34,6 +34,56 @@ pub enum Icon {
 }
 
 impl Icon {
+    /// Every icon, in declaration order — the debug gallery walks this.
+    pub const ALL: [Self; 20] = [
+        Self::Hash,
+        Self::Voice,
+        Self::Search,
+        Self::Mic,
+        Self::Headphones,
+        Self::Camera,
+        Self::Screen,
+        Self::Phone,
+        Self::Users,
+        Self::Pin,
+        Self::Inbox,
+        Self::Plus,
+        Self::Send,
+        Self::Emoji,
+        Self::Chevron,
+        Self::Close,
+        Self::Edit,
+        Self::Dm,
+        Self::Image,
+        Self::Compass,
+    ];
+
+    /// Lowercase variant name, for the gallery's captions.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Hash => "hash",
+            Self::Voice => "voice",
+            Self::Search => "search",
+            Self::Mic => "mic",
+            Self::Headphones => "headphones",
+            Self::Camera => "camera",
+            Self::Screen => "screen",
+            Self::Phone => "phone",
+            Self::Users => "users",
+            Self::Pin => "pin",
+            Self::Inbox => "inbox",
+            Self::Plus => "plus",
+            Self::Send => "send",
+            Self::Emoji => "emoji",
+            Self::Chevron => "chevron",
+            Self::Close => "close",
+            Self::Edit => "edit",
+            Self::Dm => "dm",
+            Self::Image => "image",
+            Self::Compass => "compass",
+        }
+    }
+
     /// Inner markup of the Lucide source SVG, without the `<svg>` wrapper.
     fn paths(self) -> &'static str {
         match self {

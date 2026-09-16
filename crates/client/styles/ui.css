@@ -1,0 +1,180 @@
+/* UI primitives — spec 0008, artboard "Spec".
+   Sizes come in as inline custom properties (--size and friends) so a
+   component keeps one rule set for every size on the canvas. */
+
+/* icon button — 32 r8 icon 18, sm 26 icon 15 */
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--btn-size, 32px);
+  height: var(--btn-size, 32px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--bg-panel-2);
+  color: var(--text-primary);
+}
+
+.icon-btn:active:not(:disabled) {
+  background: var(--bg-input);
+}
+
+.icon-btn--toggled {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.icon-btn--toggled:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.icon-btn--danger {
+  color: var(--danger);
+}
+
+.icon-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* avatar — initials in the display face at 0.42x, 12px status ring */
+
+.avatar {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: var(--size);
+  height: var(--size);
+}
+
+.avatar__face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--bg-panel-2);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: calc(var(--size) * 0.42);
+  line-height: 1;
+  overflow: hidden;
+}
+
+.avatar__face img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar--speaking .avatar__face {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+  transition: box-shadow 100ms var(--ease);
+}
+
+.avatar__status {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-pill);
+  border: 2.5px solid var(--status-ring-bg, var(--bg));
+  background: var(--text-tertiary);
+}
+
+.avatar__status--online {
+  background: var(--sage);
+}
+
+.avatar__status--idle {
+  background: var(--idle);
+}
+
+.avatar__status--dnd {
+  background: var(--rose);
+}
+
+.avatar__status--offline {
+  background: var(--text-tertiary);
+}
+
+/* text field — h34 r9 px12, px32 with a leading icon */
+
+.field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.field__icon {
+  position: absolute;
+  left: 10px;
+  display: flex;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.field__input {
+  width: 100%;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.field--with-icon .field__input {
+  padding-left: 32px;
+}
+
+.field__input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.field__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.field--error .field__input,
+.field--error .field__input:focus {
+  border-color: var(--danger);
+  box-shadow: none;
+}
+
+.field__input:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.field__message {
+  margin-top: 5px;
+  color: var(--danger);
+}
