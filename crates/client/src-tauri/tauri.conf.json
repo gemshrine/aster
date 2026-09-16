@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "gavno-voice",
+  "productName": "Aster",
   "version": "0.1.0",
-  "identifier": "dev.gemshrine.gavno-voice",
+  "identifier": "dev.gemshrine.aster",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "gavno-voice",
+        "title": "Aster",
         "width": 900,
         "height": 640
       }
