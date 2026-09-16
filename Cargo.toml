@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/signaling-server",
+    "crates/client/src-tauri",
+]
+exclude = ["crates/client"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"

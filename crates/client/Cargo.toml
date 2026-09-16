@@ -1,0 +1,9 @@
+[package]
+name = "client-web"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+console_error_panic_hook = "0.1.7"
+leptos = { version = "0.8.20", features = ["csr"] }
+wasm-bindgen = "0.2.128"
