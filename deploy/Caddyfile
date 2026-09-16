@@ -1,0 +1,11 @@
+{$ASTER_DOMAIN} {
+	handle /ws {
+		reverse_proxy signaling-server:8080
+	}
+	handle /health {
+		reverse_proxy signaling-server:8080
+	}
+	handle {
+		respond 404
+	}
+}

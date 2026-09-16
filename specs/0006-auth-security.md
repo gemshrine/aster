@@ -20,7 +20,7 @@
 
 - WebSocket только по WSS (TLS), терминация TLS — на `Caddy` (reverse proxy перед `signaling-server`), сертификат — Let's Encrypt автоматически через Caddy.
 - Голосовой трафик — DTLS/SRTP, встроено в WebRTC, обязательно (не opt-out).
-- TURN (`coturn`) — тоже за TLS/DTLS где возможно (`turns:`), с собственными credentials (можно static-auth-secret coturn, ротируемый независимо от auth-токенов приложения).
+- TURN (`coturn`) — с `static-auth-secret` (временные HMAC-креды, ротируется независимо от auth-токенов приложения). В v1 без `turns:` — см. `0007`; медиа через TURN всё равно зашифровано DTLS-SRTP.
 
 ### Что не шифруется отдельно (v1)
 

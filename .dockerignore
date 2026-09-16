@@ -1,0 +1,6 @@
+target
+**/target
+crates/client/dist
+crates/client/src-tauri/gen
+.git
+deploy/.env
