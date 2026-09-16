@@ -42,11 +42,11 @@ impl Framer {
             on_frame(&frame);
             self.pending.clear();
         }
-        let mut chunks = samples.chunks_exact(FRAME);
-        for chunk in &mut chunks {
-            on_frame(chunk.try_into().expect("chunk is one frame"));
+        let (frames, remainder) = samples.as_chunks::<FRAME>();
+        for frame in frames {
+            on_frame(frame);
         }
-        self.pending.extend_from_slice(chunks.remainder());
+        self.pending.extend_from_slice(remainder);
     }
 }
 
