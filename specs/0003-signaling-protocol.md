@@ -1,7 +1,7 @@
 # 0003 — Протокол сигналинга
 
 - **Status:** Accepted
-- **Issue:** —
+- **Issue:** #2
 
 ## Проблема
 
@@ -15,15 +15,19 @@
 
 ### Версионирование
 
-Каждое сообщение — enum `ClientMessage` / `ServerMessage` в `crates/protocol`, сериализуется как `{"type": "...", ...}` через `serde(tag = "type")`. Несовместимые изменения протокола — bump `PROTOCOL_VERSION: u32` константы, сервер отклоняет клиентов с несовпадающей версией на этапе `Hello`.
+Каждое сообщение — enum `ClientMessage` / `ServerMessage` в `crates/protocol`, сериализуется как `{"type": "...", ...}` через `serde(tag = "type")`. Имена типов и enum-значений — snake_case (`chat_delivered`, `ice_candidate`, `invalid_token`). `SignalPayload` внутри `payload` использует тот же дискриминатор `type`. Несовместимые изменения протокола — bump `PROTOCOL_VERSION: u32` константы, сервер отклоняет клиентов с несовпадающей версией на этапе `Hello`.
 
 ### Handshake / auth
 
 ```
 Client -> Server: Hello { protocol_version, auth_token }
 Server -> Client: Welcome { user_id, peer_online: bool }
-                  | Rejected { reason }
+                  | Rejected { reason: RejectReason }
+
+enum RejectReason { InvalidToken, UnsupportedProtocolVersion }
 ```
+
+`UserId` — строка (`"user_id": "alice"`). После `Rejected` сервер закрывает соединение. Любое другое сообщение до успешного `Hello` → `Error { NotAuthenticated }`.
 
 `auth_token` — см. `0006-auth-security.md` (пер-пользовательский долгоживущий токен, выданный вручную при деплое).
 
@@ -54,15 +58,24 @@ enum SignalPayload {
 ```
 Client -> Server: ChatMessage { id: Uuid, body: String, sent_at: i64 }
 Server -> Client: ChatMessage { id, from: UserId, body, sent_at }
-Server -> Client: ChatDelivered { id: Uuid }   // ack отправителю, что сервер доставил получателю (не персистентность — см. 0004)
+Server -> Client: ChatDelivered { id: Uuid }   // получатель онлайн, сообщение ему передано
+Server -> Client: ChatQueued { id: Uuid }      // получатель офлайн, сообщение в in-memory очереди (см. 0004)
 ```
 
-`id` генерируется клиентом (UUID v4) — используется для дедупликации/ack, не для сортировки (сортировка по `sent_at` + insertion order).
+`id` генерируется клиентом (UUID v4) — используется для дедупликации/ack, не для сортировки (сортировка по `sent_at` + insertion order). `sent_at` — unix time в миллисекундах.
 
 ### Ошибки
 
 ```
 Server -> Client: Error { code: ErrorCode, message: String }
+
+enum ErrorCode {
+    MalformedMessage,   // не распарсилось
+    NotAuthenticated,   // сообщение до Hello
+    PeerOffline,        // Signal, когда собеседник офлайн
+    SessionReplaced,    // этот же user_id подключился заново; старое соединение закрывается
+    QueueFull,          // офлайн-очередь получателя переполнена, сообщение отброшено
+}
 ```
 
 ## Альтернативы
