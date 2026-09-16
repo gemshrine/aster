@@ -46,7 +46,7 @@
   flex: 1;
   min-width: 480px;
   background: var(--bg);
-  overflow: auto;
+  overflow: hidden;
 }
 
 /* connection indicator */

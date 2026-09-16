@@ -41,7 +41,7 @@ pub fn IconButton(
     /// Takes a plain kind or a signal, so a toggle can flip it live.
     #[prop(optional, into)]
     kind: Signal<IconButtonKind>,
-    #[prop(default = false)] disabled: bool,
+    #[prop(default = false.into(), into)] disabled: Signal<bool>,
     #[prop(optional)] on_click: Option<Callback<()>>,
 ) -> impl IntoView {
     let sizes = Signal::derive(move || kind.get().size());
@@ -52,8 +52,11 @@ pub fn IconButton(
             style=move || format!("--btn-size:{}px", sizes.get().0)
             aria-label=label
             title=label
-            disabled=disabled
+            disabled=move || disabled.get()
             on:click=move |_| {
+                if disabled.get() {
+                    return;
+                }
                 if let Some(cb) = on_click {
                     cb.run(());
                 }

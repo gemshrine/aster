@@ -1,9 +1,12 @@
 use leptos::prelude::*;
 
+mod chat;
 mod connection;
 mod ui;
 
+use chat::{Author, Message, Status};
 use connection::ConnectionState;
+use ui::chat::{Composer, MessageList};
 use ui::shell::Shell;
 
 fn main() {
@@ -24,13 +27,31 @@ fn App() -> impl IntoView {
     // from the state a fresh install is in.
     let state = RwSignal::new(ConnectionState::NotConfigured);
 
+    // History comes from local SQLite in #6; until then the list starts empty
+    // and sends only land in it optimistically.
+    let messages = RwSignal::new(Vec::<Message>::new());
+    let offline = Signal::derive(move || !state.get().peer_online());
+    let on_send = Callback::new(move |body: String| {
+        messages.update(|messages| {
+            messages.push(Message {
+                id: format!("local-{}", messages.len()),
+                author: Author::Me,
+                body,
+                sent_at: js_sys::Date::now() as i64,
+                status: Some(Status::Sending),
+            })
+        })
+    });
+
     view! {
         <Shell state=state.into() peer_name="Кент" self_name="Ты">
-            <div style="padding:26px 22px;">
-                <p class="t-ui" style="color:var(--text-secondary);">
-                    "Лента и композер появятся в "<code>"#6"</code>", звонок — в "
-                    <code>"#7"</code>"."
-                </p>
+            <div class="chat-pane">
+                <MessageList messages=messages.into() peer_name="Кент" self_name="Ты" />
+                <Composer
+                    disabled=offline
+                    placeholder="Сообщение Кенту"
+                    on_send=on_send
+                />
             </div>
         </Shell>
     }

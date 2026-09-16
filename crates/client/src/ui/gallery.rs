@@ -3,9 +3,11 @@
 
 use leptos::prelude::*;
 
+use crate::chat::{Author, Message, Status};
 use crate::connection::{ConnectionState, FailureReason};
 
 use super::avatar::{Avatar, Presence};
+use super::chat::{Composer, MessageList};
 use super::icon_button::{IconButton, IconButtonKind};
 use super::icons::Icon;
 use super::shell::Shell;
@@ -38,6 +40,139 @@ fn Case(label: &'static str, children: Children) -> impl IntoView {
         <div style="display:flex; flex-direction:column; align-items:flex-start; gap:8px;">
             {children()}
             <span class="t-caption">{label}</span>
+        </div>
+    }
+}
+
+/// Mock conversation covering grouping, both bubble sides and every status.
+fn mock_messages() -> Vec<Message> {
+    let minute = 60 * 1000;
+    let base = js_sys::Date::now() as i64 - 90 * minute;
+    let msg = |id: &str, author, body: &str, offset: i64, status| Message {
+        id: id.into(),
+        author,
+        body: body.into(),
+        sent_at: base + offset * minute,
+        status,
+    };
+    vec![
+        msg(
+            "1",
+            Author::Peer,
+            "Слушай, сервер поднял — TURN тоже отвечает.",
+            0,
+            None,
+        ),
+        msg(
+            "2",
+            Author::Peer,
+            "Проверь у себя, я оставил токен в закреплённом.",
+            1,
+            None,
+        ),
+        msg(
+            "3",
+            Author::Me,
+            "Подключился, всё видно.",
+            3,
+            Some(Status::Delivered),
+        ),
+        msg(
+            "4",
+            Author::Me,
+            "Осталось прикрутить историю к SQLite — это #6.",
+            4,
+            Some(Status::Sent),
+        ),
+        msg(
+            "5",
+            Author::Peer,
+            "Ага, а звонок тогда следующим.",
+            20,
+            None,
+        ),
+        msg(
+            "6",
+            Author::Me,
+            "Сейчас отправлю правки.",
+            25,
+            Some(Status::Sending),
+        ),
+        msg(
+            "7",
+            Author::Me,
+            "И ещё вот это, пока ты офлайн.",
+            40,
+            Some(Status::Queued),
+        ),
+        msg(
+            "8",
+            Author::Me,
+            "А это уже не влезло.",
+            60,
+            Some(Status::Rejected {
+                message: "Очередь переполнена — не доставлено".into(),
+            }),
+        ),
+    ]
+}
+
+#[component]
+fn ChatCase() -> impl IntoView {
+    let messages = RwSignal::new(mock_messages());
+    let offline = RwSignal::new(false);
+    let on_send = Callback::new(move |body: String| {
+        messages.update(|messages| {
+            messages.push(Message {
+                id: format!("local-{}", messages.len()),
+                author: Author::Me,
+                body,
+                sent_at: js_sys::Date::now() as i64,
+                status: Some(Status::Sending),
+            })
+        })
+    });
+
+    view! {
+        <div style="width:100%;">
+            <div style="display:flex; gap:8px; margin-bottom:14px;">
+                <button
+                    class="peer__call t-ui-strong"
+                    style="width:auto; margin:0; padding:0 12px; height:28px;"
+                    type="button"
+                    on:click=move |_| offline.update(|v| *v = !*v)
+                >
+                    {move || {
+                        if offline.get() { "композер: disabled" } else { "композер: default" }
+                    }}
+                </button>
+                <button
+                    class="peer__call t-ui-strong"
+                    style="width:auto; margin:0; padding:0 12px; height:28px;"
+                    type="button"
+                    on:click=move |_| messages.set(Vec::new())
+                >
+                    "пустая лента"
+                </button>
+                <button
+                    class="peer__call t-ui-strong"
+                    style="width:auto; margin:0; padding:0 12px; height:28px;"
+                    type="button"
+                    on:click=move |_| messages.set(mock_messages())
+                >
+                    "вернуть переписку"
+                </button>
+            </div>
+            <div style="height:520px; border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; background:var(--bg);">
+                <div class="chat-pane">
+                    <MessageList messages=messages.into() peer_name="Кент" self_name="Ты" />
+                    <Composer
+                        disabled=offline
+                        placeholder="Сообщение Кенту"
+                        on_send=on_send
+                    />
+                </div>
+            </div>
         </div>
     }
 }
@@ -125,6 +260,10 @@ pub fn Gallery() -> impl IntoView {
 
             <Section title="Shell" note="title 44 · sidebar 264 · main flex 1 — all six connection states">
                 <ShellCase />
+            </Section>
+
+            <Section title="Chat" note="лента 22/18 · gap 15 · группировка < 5 мин · пузыри max 520 · композер h52">
+                <ChatCase />
             </Section>
 
             <Section title="Icon button" note="32 · r8 · icon 18 / sm 26 · icon 15">
