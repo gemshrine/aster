@@ -1,0 +1,48 @@
+/* Design tokens — spec 0008, artboard "Spec" of the Aster canvas.
+   Dark theme only in v1; a light theme would redefine these values. */
+
+:root {
+  /* surfaces */
+  --bg: #131117;
+  --bg-elevated: #18151d;
+  --bg-panel: #1c1922;
+  --bg-panel-2: #26212e;
+  --bg-input: #2a2532;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-soft: rgba(255, 255, 255, 0.045);
+
+  /* text */
+  --text-primary: #f3f0f7;
+  --text-secondary: #a79fb5;
+  --text-tertiary: #6f6880;
+  --text-message: #dcd7e6;
+
+  /* accent — themeable: every other accent value derives from --accent */
+  --accent: #a392dd;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-dim: color-mix(in srgb, var(--accent) 55%, #000);
+
+  /* status */
+  --rose: #d3a6ac;
+  --sage: #9fbba4;
+  --idle: #d8bd6f;
+  --danger: #c97b72;
+
+  /* type */
+  --font-display: 'Instrument Serif', Georgia, serif;
+  --font-ui: 'Hanken Grotesk', 'Inter', system-ui, sans-serif;
+
+  /* radii */
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-md: 9px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 50%;
+  --r-arch: 28px 28px 14px 14px;
+
+  /* motion */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 150ms;
+}
