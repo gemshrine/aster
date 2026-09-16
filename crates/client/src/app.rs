@@ -3,8 +3,10 @@
 use leptos::prelude::*;
 
 use crate::bridge::{self, CommandError};
+use crate::call::{CallState, EndReason};
 use crate::chat::{Author, Message, Status};
 use crate::connection::ConnectionState;
+use crate::ui::call::{CallOutcome, CallPane};
 use crate::ui::chat::{Composer, MessageList};
 use crate::ui::settings::{SettingsPanel, SettingsView};
 use crate::ui::shell::Shell;
@@ -71,6 +73,24 @@ impl From<CoreMessage> for Message {
 struct HistoryArgs {
     before: Option<String>,
     limit: u32,
+}
+
+/// `call-audio` (spec 0011).
+#[derive(Clone, Copy, serde::Deserialize)]
+struct CallAudio {
+    muted: bool,
+    local_speaking: bool,
+    remote_speaking: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct CallAudioError {
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+struct MuteArgs {
+    muted: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -153,6 +173,73 @@ pub fn App() -> impl IntoView {
 
     // An offline peer still gets messages through the server's queue, so
     // only a dead link disables the composer (spec 0004).
+    // --- call (spec 0011) ---
+
+    let call = RwSignal::new(CallState::Idle);
+    let outcome = RwSignal::new(None::<EndReason>);
+    let muted = RwSignal::new(false);
+    let local_speaking = RwSignal::new(false);
+    let remote_speaking = RwSignal::new(false);
+
+    leptos::task::spawn_local(async move {
+        if let Ok(current) = bridge::invoke::<_, CallState>("call_state", &()).await {
+            call.set(current);
+        }
+    });
+
+    bridge::listen::<CallState>("call-state", move |next| {
+        // `ended` is momentary: the core returns to idle right after it, so
+        // the outcome lives here until the next call or a dismissal.
+        if let CallState::Ended { reason } = next {
+            outcome.set(Some(reason));
+            local_speaking.set(false);
+            remote_speaking.set(false);
+        } else if next != CallState::Idle {
+            outcome.set(None);
+        }
+        call.set(next);
+    });
+
+    bridge::listen::<CallAudio>("call-audio", move |audio| {
+        muted.set(audio.muted);
+        local_speaking.set(audio.local_speaking);
+        remote_speaking.set(audio.remote_speaking);
+    });
+
+    bridge::listen::<CallAudioError>("call-audio-error", move |err| {
+        web_sys::console::error_1(&format!("звук: {}", err.message).into());
+    });
+
+    /// Fires a call command and reports a refusal to the console; the core
+    /// keeps authoritative state, so there is nothing to roll back here.
+    fn call_command(cmd: &'static str) {
+        leptos::task::spawn_local(async move {
+            let result: Result<(), CommandError> = bridge::invoke(cmd, &()).await;
+            if let Err(err) = result {
+                web_sys::console::error_1(&format!("{cmd}: {}", err.message).into());
+            }
+        });
+    }
+
+    let on_call = Callback::new(move |()| call_command("start_call"));
+    let on_accept = Callback::new(move |()| call_command("accept_call"));
+    let on_decline = Callback::new(move |()| call_command("decline_call"));
+    let on_hang_up = Callback::new(move |()| call_command("hang_up"));
+    let on_mute = Callback::new(move |()| {
+        let next = !muted.get();
+        // Optimistic: `call-audio` confirms it a moment later.
+        muted.set(next);
+        leptos::task::spawn_local(async move {
+            let result: Result<(), CommandError> =
+                bridge::invoke("set_muted", &MuteArgs { muted: next }).await;
+            if let Err(err) = result {
+                web_sys::console::error_1(&format!("set_muted: {}", err.message).into());
+            }
+        });
+    });
+
+    let in_call = Signal::derive(move || call.get().is_active());
+
     let offline = Signal::derive(move || !state.get().can_send());
     let settings_open = Signal::derive(move || {
         show_settings.get() || matches!(state.get(), ConnectionState::NotConfigured)
@@ -164,23 +251,59 @@ pub fn App() -> impl IntoView {
             peer_name=PEER_NAME
             self_name=SELF_NAME
             on_settings=Callback::new(move |()| show_settings.update(|open| *open = !*open))
+            in_call=in_call
+            on_call=on_call
         >
             <Show
                 when=move || settings_open.get()
                 fallback=move || {
                     view! {
-                        <div class="chat-pane">
-                            <MessageList
-                                messages=messages.into()
+                        <Show
+                            when=move || in_call.get()
+                            fallback=move || {
+                                view! {
+                                    <div class="chat-pane">
+                                        <MessageList
+                                            messages=messages.into()
+                                            peer_name=PEER_NAME
+                                            self_name=SELF_NAME
+                                        />
+                                        {move || {
+                                            outcome
+                                                .get()
+                                                .map(|reason| {
+                                                    view! {
+                                                        <CallOutcome
+                                                            message=reason.message()
+                                                            on_dismiss=Callback::new(move |()| {
+                                                                outcome.set(None)
+                                                            })
+                                                        />
+                                                    }
+                                                })
+                                        }}
+                                        <Composer
+                                            disabled=offline
+                                            placeholder="Сообщение Кенту"
+                                            on_send=on_send
+                                        />
+                                    </div>
+                                }
+                            }
+                        >
+                            <CallPane
+                                state=call.into()
                                 peer_name=PEER_NAME
                                 self_name=SELF_NAME
+                                muted=muted
+                                local_speaking=local_speaking
+                                remote_speaking=remote_speaking
+                                on_mute=on_mute
+                                on_accept=on_accept
+                                on_decline=on_decline
+                                on_hang_up=on_hang_up
                             />
-                            <Composer
-                                disabled=offline
-                                placeholder="Сообщение Кенту"
-                                on_send=on_send
-                            />
-                        </div>
+                        </Show>
                     }
                 }
             >

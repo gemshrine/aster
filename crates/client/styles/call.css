@@ -1,0 +1,127 @@
+/* Call screen — spec 0008, artboard "Active voice call". */
+
+.call {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  height: 100%;
+  padding: 28px;
+}
+
+.call__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 320px));
+  gap: 20px;
+  width: 100%;
+  max-width: 680px;
+}
+
+.call__timer {
+  color: var(--text-secondary);
+}
+
+.call-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 240px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-arch);
+  background: var(--bg-panel);
+  transition: box-shadow var(--dur) var(--ease);
+}
+
+.call-tile--speaking {
+  border-color: transparent;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.call-tile__name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.call-tile__muted {
+  display: flex;
+  color: var(--rose);
+}
+
+/* controls — 46px pills, leave is wider and carries a label */
+
+.call-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.call-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--bg-panel-2);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.call-control:hover {
+  background: var(--bg-input);
+}
+
+.call-control--off {
+  background: color-mix(in srgb, var(--rose) 20%, transparent);
+  color: var(--rose);
+}
+
+.call-control--leave,
+.call-control--accept {
+  width: auto;
+  height: 46px;
+  padding: 0 20px;
+  border-radius: 23px;
+}
+
+.call-control--leave {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  color: var(--danger);
+}
+
+.call-control--leave:hover {
+  background: color-mix(in srgb, var(--danger) 32%, transparent);
+}
+
+.call-control--accept {
+  background: color-mix(in srgb, var(--sage) 22%, transparent);
+  color: var(--sage);
+}
+
+.call-control--accept:hover {
+  background: color-mix(in srgb, var(--sage) 32%, transparent);
+}
+
+/* outcome strip above the composer */
+
+.call-outcome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 22px 10px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
