@@ -3,9 +3,12 @@
 
 use leptos::prelude::*;
 
+use crate::connection::{ConnectionState, FailureReason};
+
 use super::avatar::{Avatar, Presence};
 use super::icon_button::{IconButton, IconButtonKind};
 use super::icons::Icon;
+use super::shell::Shell;
 use super::text_field::TextField;
 
 /// True when the page was opened at the gallery's dev route.
@@ -40,6 +43,73 @@ fn Case(label: &'static str, children: Children) -> impl IntoView {
 }
 
 #[component]
+fn ShellCase() -> impl IntoView {
+    let states = [
+        ("not_configured", ConnectionState::NotConfigured),
+        ("connecting", ConnectionState::Connecting { attempt: 2 }),
+        (
+            "connected",
+            ConnectionState::Connected {
+                user_id: "morphe".into(),
+                peer_online: true,
+            },
+        ),
+        (
+            "reconnecting",
+            ConnectionState::Reconnecting {
+                attempt: 3,
+                retry_in_ms: 4000,
+            },
+        ),
+        ("disconnected", ConnectionState::Disconnected),
+        (
+            "failed",
+            ConnectionState::Failed {
+                reason: FailureReason::SessionReplaced,
+            },
+        ),
+    ];
+    let state = RwSignal::new(ConnectionState::Connected {
+        user_id: "morphe".into(),
+        peer_online: true,
+    });
+
+    view! {
+        <div style="width:100%;">
+            <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+                {states
+                    .into_iter()
+                    .map(|(label, value)| {
+                        let value = StoredValue::new(value);
+                        view! {
+                            <button
+                                class="peer__call t-ui-strong"
+                                style="width:auto; margin:0; padding:0 12px; height:28px;"
+                                type="button"
+                                on:click=move |_| state.set(value.get_value())
+                            >
+                                {label}
+                            </button>
+                        }
+                    })
+                    .collect_view()}
+            </div>
+            <div style="height:420px; resize:both; overflow:hidden; border:1px solid var(--border); border-radius:var(--r-lg);">
+                <div style="height:100%; zoom:0.72;">
+                    <Shell state=state.into() peer_name="Кент" self_name="Ты">
+                        <div style="padding:26px 22px;">
+                            <p class="t-ui" style="color:var(--text-secondary);">
+                                "Основная область — лента и композер в #6."
+                            </p>
+                        </div>
+                    </Shell>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+#[component]
 pub fn Gallery() -> impl IntoView {
     let empty = RwSignal::new(String::new());
     let filled = RwSignal::new(String::from("Botanical Society"));
@@ -52,6 +122,10 @@ pub fn Gallery() -> impl IntoView {
             <p class="t-ui" style="color:var(--text-secondary); margin-bottom:30px;">
                 "Debug-only gallery — spec 0008, artboard "<em>"Spec"</em>"."
             </p>
+
+            <Section title="Shell" note="title 44 · sidebar 264 · main flex 1 — all six connection states">
+                <ShellCase />
+            </Section>
 
             <Section title="Icon button" note="32 · r8 · icon 18 / sm 26 · icon 15">
                 <Case label="default">

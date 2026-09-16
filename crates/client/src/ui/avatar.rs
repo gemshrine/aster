@@ -50,27 +50,31 @@ pub fn Avatar(
     /// Full name; initials and the accessible label come from it.
     name: String,
     #[prop(default = 38.0)] size: f64,
-    #[prop(optional)] presence: Option<Presence>,
+    /// Takes a plain presence or a signal, so a card can follow the peer.
+    #[prop(optional, into)]
+    presence: Option<Signal<Presence>>,
     /// Surface the avatar sits on, so the status ring cuts out of it.
     #[prop(default = "var(--bg)")]
     ring_bg: &'static str,
 ) -> impl IntoView {
-    let label = presence.map_or_else(
-        || name.clone(),
-        |presence| format!("{name} — {}", presence.label()),
-    );
     let text = initials(&name);
-    let speaking = presence == Some(Presence::Speaking);
+    let label = Signal::derive(move || match presence {
+        Some(presence) => format!("{name} — {}", presence.get().label()),
+        None => name.clone(),
+    });
+    let speaking = move || presence.is_some_and(|p| p.get() == Presence::Speaking);
     view! {
         <span
-            class=if speaking { "avatar avatar--speaking" } else { "avatar" }
+            class="avatar"
+            class:avatar--speaking=speaking
             style=format!("--size:{size}px; --status-ring-bg:{ring_bg}")
-            title=label.clone()
-            aria-label=label
+            title=move || label.get()
+            aria-label=move || label.get()
             role="img"
         >
             <span class="avatar__face">{text}</span>
-            {presence.map(|presence| view! { <span class=presence.status_class()></span> })}
+            {presence
+                .map(|presence| view! { <span class=move || presence.get().status_class()></span> })}
         </span>
     }
 }

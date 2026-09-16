@@ -1,8 +1,10 @@
 use leptos::prelude::*;
 
+mod connection;
 mod ui;
 
-use ui::icons::{Icon, IconView};
+use connection::ConnectionState;
+use ui::shell::Shell;
 
 fn main() {
     console_error_panic_hook::set_once();
@@ -18,15 +20,19 @@ fn App() -> impl IntoView {
         return ui::gallery::Gallery().into_any();
     }
 
+    // Until #5 wires the core's `connection-state` event, the shell starts
+    // from the state a fresh install is in.
+    let state = RwSignal::new(ConnectionState::NotConfigured);
+
     view! {
-        <main style="padding:24px; display:flex; align-items:center; gap:10px;">
-            <IconView icon=Icon::Compass size=24.0 />
-            <h1 class="t-display-m">"Aster"</h1>
-            <p class="t-ui" style="color:var(--text-secondary);">
-                "Client scaffold. Chat lands in "<code>"#6"</code>", voice calling in "
-                <code>"#7"</code>"."
-            </p>
-        </main>
+        <Shell state=state.into() peer_name="Кент" self_name="Ты">
+            <div style="padding:26px 22px;">
+                <p class="t-ui" style="color:var(--text-secondary);">
+                    "Лента и композер появятся в "<code>"#6"</code>", звонок — в "
+                    <code>"#7"</code>"."
+                </p>
+            </div>
+        </Shell>
     }
     .into_any()
 }
