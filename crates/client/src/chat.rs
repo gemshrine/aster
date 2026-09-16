@@ -111,6 +111,29 @@ pub fn day(sent_at: i64) -> String {
         .into()
 }
 
+/// How close to the bottom still counts as "following the conversation", in px.
+const STICK_SLACK: f64 = 80.0;
+
+/// How close to the top starts loading the previous page, in px.
+const LOAD_SLACK: f64 = 120.0;
+
+/// Whether the list should jump to the newest message when one arrives.
+/// Reading older messages must not yank the view down on every incoming line.
+pub fn follows_bottom(scroll_top: f64, client_height: f64, scroll_height: f64) -> bool {
+    scroll_height - scroll_top - client_height <= STICK_SLACK
+}
+
+/// Whether the reader is close enough to the top to want the previous page.
+pub fn wants_older(scroll_top: f64) -> bool {
+    scroll_top <= LOAD_SLACK
+}
+
+/// Scroll offset that keeps the same message under the cursor after older
+/// messages are prepended and the list grows upward.
+pub fn restored_scroll_top(previous_top: f64, previous_height: f64, new_height: f64) -> f64 {
+    (previous_top + (new_height - previous_height)).max(0.0)
+}
+
 /// `HH:MM` in the local timezone of the browser.
 pub fn clock(sent_at: i64) -> String {
     let date = js_sys::Date::new(&(sent_at as f64).into());
@@ -190,6 +213,34 @@ mod tests {
         second.status = Some(Status::Sending);
         let groups = group(&[first, second]);
         assert_eq!(groups[0].status(), Some(&Status::Sending));
+    }
+
+    #[test]
+    fn following_the_bottom_tolerates_a_little_slack() {
+        // Pinned to the bottom, and a few pixels above it.
+        assert!(follows_bottom(600.0, 400.0, 1000.0));
+        assert!(follows_bottom(560.0, 400.0, 1000.0));
+        // Scrolled up into the history.
+        assert!(!follows_bottom(100.0, 400.0, 1000.0));
+        // A list shorter than the viewport is always at the bottom.
+        assert!(follows_bottom(0.0, 400.0, 300.0));
+    }
+
+    #[test]
+    fn older_pages_are_wanted_only_near_the_top() {
+        assert!(wants_older(0.0));
+        assert!(wants_older(120.0));
+        assert!(!wants_older(400.0));
+    }
+
+    #[test]
+    fn prepending_keeps_the_same_message_in_view() {
+        // 900px of older messages went in above: the offset grows by as much.
+        assert_eq!(restored_scroll_top(50.0, 1000.0, 1900.0), 950.0);
+        // Nothing was added — nothing moves.
+        assert_eq!(restored_scroll_top(50.0, 1000.0, 1000.0), 50.0);
+        // A list that somehow shrank must not scroll to a negative offset.
+        assert_eq!(restored_scroll_top(10.0, 1000.0, 900.0), 0.0);
     }
 
     #[test]

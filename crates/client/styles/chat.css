@@ -10,6 +10,11 @@
   overflow-y: auto;
 }
 
+.msg-list__loading {
+  align-self: center;
+  color: var(--text-tertiary);
+}
+
 .msg-list__empty {
   margin: auto;
   color: var(--text-tertiary);

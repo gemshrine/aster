@@ -4,7 +4,10 @@
 
 use leptos::prelude::*;
 
-use crate::chat::{clock, day, group, Author, Group, Message, Status};
+use crate::chat::{
+    clock, day, follows_bottom, group, restored_scroll_top, wants_older, Author, Group, Message,
+    Status,
+};
 
 use super::avatar::Avatar;
 use super::icon_button::{IconButton, IconButtonKind};
@@ -74,20 +77,62 @@ pub fn MessageList(
     messages: Signal<Vec<Message>>,
     #[prop(into)] peer_name: String,
     #[prop(into)] self_name: String,
+    /// Asks for the page before the oldest message currently held.
+    #[prop(optional)]
+    on_load_older: Option<Callback<()>>,
+    #[prop(into, optional)] loading_older: Signal<bool>,
 ) -> impl IntoView {
     let groups = Signal::derive(move || group(&messages.get()));
-    // Keep the newest message in view — a chat that opens scrolled to the top
-    // of last week is useless.
     let list: NodeRef<leptos::html::Div> = NodeRef::new();
+    // Where the viewport sat before older messages were prepended, so the
+    // same message can be put back under the reader's eyes.
+    let anchor = RwSignal::new(None::<(f64, f64)>);
+    // Start pinned to the bottom: a chat that opens on last week is useless.
+    let at_bottom = RwSignal::new(true);
+
     Effect::new(move |_| {
         groups.track();
-        if let Some(list) = list.get() {
-            list.set_scroll_top(list.scroll_height());
+        let Some(list) = list.get() else { return };
+        let height = f64::from(list.scroll_height());
+        match anchor.get_untracked() {
+            Some((previous_top, previous_height)) => {
+                anchor.set(None);
+                list.set_scroll_top(
+                    restored_scroll_top(previous_top, previous_height, height) as i32
+                );
+            }
+            None if at_bottom.get_untracked() => list.set_scroll_top(height as i32),
+            None => (),
         }
     });
+
+    let on_scroll = move |_| {
+        let Some(list) = list.get_untracked() else {
+            return;
+        };
+        let (top, client, height) = (
+            f64::from(list.scroll_top()),
+            f64::from(list.client_height()),
+            f64::from(list.scroll_height()),
+        );
+        at_bottom.set(follows_bottom(top, client, height));
+        if let Some(on_load_older) = on_load_older {
+            if wants_older(top)
+                && !loading_older.get_untracked()
+                && anchor.get_untracked().is_none()
+            {
+                anchor.set(Some((top, height)));
+                on_load_older.run(());
+            }
+        }
+    };
+
     view! {
-        <div class="msg-list" node_ref=list>
-            <Show when=move || groups.get().is_empty()>
+        <div class="msg-list" node_ref=list on:scroll=on_scroll>
+            <Show when=move || loading_older.get()>
+                <p class="t-caption msg-list__loading">"Загружаем более раннее…"</p>
+            </Show>
+            <Show when=move || groups.get().is_empty() && !loading_older.get()>
                 <p class="t-ui msg-list__empty">"Здесь начнётся переписка."</p>
             </Show>
             {move || {
