@@ -13,13 +13,17 @@
     "windows": [
       {
         "title": "Aster",
-        "width": 900,
-        "height": 640
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "decorations": true
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": false,

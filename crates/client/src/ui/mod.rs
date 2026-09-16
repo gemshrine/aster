@@ -6,5 +6,6 @@ pub mod chat;
 pub mod gallery;
 pub mod icon_button;
 pub mod icons;
+pub mod settings;
 pub mod shell;
 pub mod text_field;

@@ -231,7 +231,12 @@ fn ShellCase() -> impl IntoView {
             </div>
             <div style="height:420px; resize:both; overflow:hidden; border:1px solid var(--border); border-radius:var(--r-lg);">
                 <div style="height:100%; zoom:0.72;">
-                    <Shell state=state.into() peer_name="Кент" self_name="Ты">
+                    <Shell
+                        state=state.into()
+                        peer_name="Кент"
+                        self_name="Ты"
+                        on_settings=Callback::new(|()| ())
+                    >
                         <div style="padding:26px 22px;">
                             <p class="t-ui" style="color:var(--text-secondary);">
                                 "Основная область — лента и композер в #6."
