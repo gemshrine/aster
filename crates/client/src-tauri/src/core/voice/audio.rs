@@ -74,7 +74,9 @@ mod device {
     use std::thread;
 
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig, SupportedStreamConfig};
+    use cpal::{
+        FromSample, Sample, SampleFormat, SizedSample, StreamConfig, SupportedStreamConfig,
+    };
 
     use super::super::media::{Framer, FRAME, SAMPLE_RATE};
     use super::{AudioBackend, AudioStream, CaptureSink, PlaybackSource, Resampler};
