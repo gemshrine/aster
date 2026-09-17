@@ -1,7 +1,7 @@
 //! Server address and token form (spec 0009 `save_settings`).
 //!
 //! The token is write-only: the core never hands it back, so an existing one
-//! shows up only as "задан".
+//! shows up only as "set".
 
 use leptos::prelude::*;
 
@@ -48,7 +48,9 @@ pub fn SettingsPanel(
         }
         let (server_url, secret) = (url.get().trim().to_string(), token.get());
         if server_url.is_empty() || secret.is_empty() {
-            error.set(Some("Нужны и адрес сервера, и токен".into()));
+            error.set(Some(
+                "Both the server address and the token are required".into(),
+            ));
             return;
         }
         saving.set(true);
@@ -75,27 +77,27 @@ pub fn SettingsPanel(
 
     view! {
         <div class="settings">
-            <h2 class="t-display-s">"Подключение"</h2>
+            <h2 class="t-display-s">"Connection"</h2>
             <p class="t-caption settings__hint">
-                "Адрес сервера сигнализации и общий токен. Токен хранится в "
-                <code>"settings.json"</code>" с правами 0600 и обратно не показывается."
+                "Signaling server address and the shared token. The token is stored in "
+                <code>"settings.json"</code>" with mode 0600 and is never shown again."
             </p>
-            <label class="t-ui-strong settings__label">"Адрес сервера"</label>
+            <label class="t-ui-strong settings__label">"Server address"</label>
             <TextField
                 value=url
                 placeholder="wss://aster.example.com/ws"
                 icon=Icon::Compass
-                aria_label="Адрес сервера"
+                aria_label="Server address"
             />
             <label class="t-ui-strong settings__label">
                 {move || {
                     match settings.get() {
-                        Some(s) if s.has_token => "Токен (задан — введите, чтобы заменить)",
-                        _ => "Токен",
+                        Some(s) if s.has_token => "Token (set — enter a new one to replace it)",
+                        _ => "Token",
                     }
                 }}
             </label>
-            <TextField value=token placeholder="общий секрет" aria_label="Токен" />
+            <TextField value=token placeholder="shared secret" aria_label="Token" />
             {move || {
                 error
                     .get()
@@ -107,7 +109,7 @@ pub fn SettingsPanel(
                 disabled=move || saving.get()
                 on:click=move |_| save()
             >
-                {move || if saving.get() { "Сохраняем…" } else { "Сохранить и подключиться" }}
+                {move || if saving.get() { "Saving…" } else { "Save and connect" }}
             </button>
         </div>
     }

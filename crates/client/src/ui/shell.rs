@@ -52,7 +52,7 @@ fn PeerCard(
                 <div class="peer__text">
                     <span class="t-body-strong">{name}</span>
                     <span class="t-caption">
-                        {move || if online.get() { "В сети" } else { "Не в сети" }}
+                        {move || if online.get() { "Online" } else { "Offline" }}
                     </span>
                 </div>
             </div>
@@ -62,7 +62,7 @@ fn PeerCard(
                 disabled=move || !can_call.get()
                 on:click=move |_| on_call.run(())
             >
-                {move || if in_call.get() { "В звонке" } else { "Позвонить" }}
+                {move || if in_call.get() { "In a call" } else { "Call" }}
             </button>
         </div>
     }
@@ -78,13 +78,13 @@ fn SelfPanel(self_name: String) -> impl IntoView {
             <span class="t-ui-strong self-panel__name">{name}</span>
             <IconButton
                 icon=Icon::Mic
-                label="Микрофон"
+                label="Microphone"
                 kind=Signal::derive(move || {
                     if muted.get() { IconButtonKind::Danger } else { IconButtonKind::Toggled }
                 })
                 on_click=Callback::new(move |()| muted.update(|m| *m = !*m))
             />
-            <IconButton icon=Icon::Headphones label="Звук" kind=IconButtonKind::Sm />
+            <IconButton icon=Icon::Headphones label="Sound" kind=IconButtonKind::Sm />
         </div>
     }
 }
@@ -108,7 +108,7 @@ pub fn Shell(
                     <ConnectionIndicator state=state />
                     <IconButton
                         icon=Icon::Edit
-                        label="Настройки подключения"
+                        label="Connection settings"
                         kind=IconButtonKind::Sm
                         on_click=on_settings
                     />

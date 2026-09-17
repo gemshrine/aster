@@ -53,13 +53,15 @@ pub async fn invoke<A: Serialize, R: DeserializeOwned>(
     args: &A,
 ) -> Result<R, CommandError> {
     if !available() {
-        return Err(CommandError::bridge("нет Tauri — запущено в браузере"));
+        return Err(CommandError::bridge(
+            "no Tauri runtime — running in a browser",
+        ));
     }
     let args = serde_wasm_bindgen::to_value(args)
-        .map_err(|err| CommandError::bridge(format!("аргументы не сериализуются: {err}")))?;
+        .map_err(|err| CommandError::bridge(format!("arguments could not be serialized: {err}")))?;
     match tauri_invoke(cmd, args).await {
         Ok(value) => serde_wasm_bindgen::from_value(value)
-            .map_err(|err| CommandError::bridge(format!("ответ не разобран: {err}"))),
+            .map_err(|err| CommandError::bridge(format!("reply could not be parsed: {err}"))),
         Err(err) => Err(serde_wasm_bindgen::from_value::<CommandError>(err.clone())
             .unwrap_or_else(|_| CommandError::bridge(format!("{err:?}")))),
     }
@@ -80,7 +82,7 @@ pub fn listen<T: DeserializeOwned + 'static>(
         match serde_wasm_bindgen::from_value::<T>(payload) {
             Ok(value) => on_event(value),
             Err(err) => web_sys::console::error_1(&JsValue::from_str(&format!(
-                "событие {event} не разобрано: {err}"
+                "event {event} could not be parsed: {err}"
             ))),
         }
     });

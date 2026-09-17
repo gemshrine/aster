@@ -62,59 +62,59 @@ fn mock_messages() -> Vec<Message> {
         msg(
             "1",
             Author::Peer,
-            "Слушай, сервер поднял — TURN тоже отвечает.",
+            "Server is up — TURN answers too.",
             0,
             None,
         ),
         msg(
             "2",
             Author::Peer,
-            "Проверь у себя, я оставил токен в закреплённом.",
+            "Check on your side, the token is in the pinned message.",
             1,
             None,
         ),
         msg(
             "3",
             Author::Me,
-            "Подключился, всё видно.",
+            "Connected, I can see everything.",
             3,
             Some(Status::Delivered),
         ),
         msg(
             "4",
             Author::Me,
-            "Осталось прикрутить историю к SQLite — это #6.",
+            "History still needs wiring to SQLite — that is #6.",
             4,
             Some(Status::Sent),
         ),
         msg(
             "5",
             Author::Peer,
-            "Ага, а звонок тогда следующим.",
+            "Right, the call comes next then.",
             20,
             None,
         ),
         msg(
             "6",
             Author::Me,
-            "Сейчас отправлю правки.",
+            "Sending the fixes now.",
             25,
             Some(Status::Sending),
         ),
         msg(
             "7",
             Author::Me,
-            "И ещё вот это, пока ты офлайн.",
+            "And this one while you are offline.",
             40,
             Some(Status::Queued),
         ),
         msg(
             "8",
             Author::Me,
-            "А это уже не влезло.",
+            "This one did not fit.",
             60,
             Some(Status::Rejected {
-                message: "Очередь переполнена — не доставлено".into(),
+                message: "Queue is full — not delivered".into(),
             }),
         ),
     ]
@@ -123,11 +123,11 @@ fn mock_messages() -> Vec<Message> {
 #[component]
 fn SoundCase() -> impl IntoView {
     let signals = [
-        ("рингтон", Sound::Ring),
-        ("гудок вызова", Sound::Dial),
-        ("соединились", Sound::Connected),
-        ("звонок завершён", Sound::Ended),
-        ("сообщение", Sound::Message),
+        ("ringtone", Sound::Ring),
+        ("dial tone", Sound::Dial),
+        ("connected", Sound::Connected),
+        ("call ended", Sound::Ended),
+        ("message", Sound::Message),
     ];
     view! {
         {signals
@@ -192,14 +192,14 @@ fn CallCase() -> impl IntoView {
                     type="button"
                     on:click=move |_| remote_speaking.update(|v| *v = !*v)
                 >
-                    "собеседник говорит"
+                    "peer speaking"
                 </button>
             </div>
             <div style="height:520px; border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; background:var(--bg);">
                 <CallPane
                     state=state.into()
-                    peer_name="Кент"
-                    self_name="Ты"
+                    peer_name="Kent"
+                    self_name="You"
                     muted=muted
                     local_speaking=Signal::derive(|| false)
                     remote_speaking=remote_speaking
@@ -247,7 +247,7 @@ fn ChatCase() -> impl IntoView {
                     on:click=move |_| offline.update(|v| *v = !*v)
                 >
                     {move || {
-                        if offline.get() { "композер: disabled" } else { "композер: default" }
+                        if offline.get() { "composer: disabled" } else { "composer: default" }
                     }}
                 </button>
                 <button
@@ -256,7 +256,7 @@ fn ChatCase() -> impl IntoView {
                     type="button"
                     on:click=move |_| messages.set(Vec::new())
                 >
-                    "пустая лента"
+                    "empty list"
                 </button>
                 <button
                     class="peer__call t-ui-strong"
@@ -264,15 +264,15 @@ fn ChatCase() -> impl IntoView {
                     type="button"
                     on:click=move |_| messages.set(mock_messages())
                 >
-                    "вернуть переписку"
+                    "restore conversation"
                 </button>
             </div>
             <div style="height:520px; border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; background:var(--bg);">
                 <div class="chat-pane">
-                    <MessageList messages=messages.into() peer_name="Кент" self_name="Ты" />
+                    <MessageList messages=messages.into() peer_name="Kent" self_name="You" />
                     <Composer
                         disabled=offline
-                        placeholder="Сообщение Кенту"
+                        placeholder="Message Kent"
                         on_send=on_send
                     />
                 </div>
@@ -337,15 +337,15 @@ fn ShellCase() -> impl IntoView {
                 <div style="height:100%; zoom:0.72;">
                     <Shell
                         state=state.into()
-                        peer_name="Кент"
-                        self_name="Ты"
+                        peer_name="Kent"
+                        self_name="You"
                         on_settings=Callback::new(|()| ())
                         in_call=false
                         on_call=Callback::new(|()| ())
                     >
                         <div style="padding:26px 22px;">
                             <p class="t-ui" style="color:var(--text-secondary);">
-                                "Основная область — лента и композер в #6."
+                                "Main area — list and composer in #6."
                             </p>
                         </div>
                     </Shell>
@@ -373,15 +373,15 @@ pub fn Gallery() -> impl IntoView {
                 <ShellCase />
             </Section>
 
-            <Section title="Sound" note="сигналы 0012 — синтез WebAudio, без аудиофайлов">
+            <Section title="Sound" note="0012 signals — synthesised with WebAudio, no audio files">
                 <SoundCase />
             </Section>
 
-            <Section title="Call" note="плитки r-arch · таймер из since · контролы 46 · входящий вызов">
+            <Section title="Call" note="tiles r-arch · timer from since · controls 46 · incoming call">
                 <CallCase />
             </Section>
 
-            <Section title="Chat" note="лента 22/18 · gap 15 · группировка < 5 мин · пузыри max 520 · композер h52">
+            <Section title="Chat" note="list 22/18 · gap 15 · grouping < 5 min · bubbles max 520 · composer h52">
                 <ChatCase />
             </Section>
 
@@ -451,7 +451,7 @@ pub fn Gallery() -> impl IntoView {
                     <p class="t-caption" style="margin-top:8px;">"filled — click to focus"</p>
                 </div>
                 <div style="width:240px;">
-                    <TextField value=wrong error="Не похоже на адрес сервера" />
+                    <TextField value=wrong error="Does not look like a server address" />
                     <p class="t-caption" style="margin-top:8px;">"error"</p>
                 </div>
                 <div style="width:240px;">

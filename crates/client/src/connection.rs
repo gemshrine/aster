@@ -44,10 +44,10 @@ pub enum FailureReason {
 impl FailureReason {
     pub fn message(&self) -> &'static str {
         match self {
-            Self::InvalidToken => "Сервер не принял токен",
-            Self::UnsupportedProtocolVersion => "Версия протокола не совпадает с серверной",
-            Self::SessionReplaced => "Подключился другой клиент под этим же пользователем",
-            Self::Other => "Сервер отклонил подключение",
+            Self::InvalidToken => "Server rejected the token",
+            Self::UnsupportedProtocolVersion => "Protocol version does not match the server",
+            Self::SessionReplaced => "Another client signed in as this user",
+            Self::Other => "Server refused the connection",
         }
     }
 }
@@ -56,16 +56,16 @@ impl ConnectionState {
     /// Short label for the title strip.
     pub fn label(&self) -> String {
         match self {
-            Self::NotConfigured => "Не настроено".into(),
+            Self::NotConfigured => "Not configured".into(),
             Self::Connecting { attempt } if *attempt > 1 => {
-                format!("Подключение… (попытка {attempt})")
+                format!("Connecting… (attempt {attempt})")
             }
-            Self::Connecting { .. } => "Подключение…".into(),
-            Self::Connected { .. } => "На связи".into(),
+            Self::Connecting { .. } => "Connecting…".into(),
+            Self::Connected { .. } => "Connected".into(),
             Self::Reconnecting { retry_in_ms, .. } => {
-                format!("Переподключение через {}", secs(*retry_in_ms))
+                format!("Reconnecting in {}", secs(*retry_in_ms))
             }
-            Self::Disconnected => "Отключено".into(),
+            Self::Disconnected => "Disconnected".into(),
             Self::Failed { reason } => reason.message().into(),
         }
     }
@@ -105,7 +105,7 @@ impl ConnectionState {
 
 /// Rounds a retry delay to whole seconds, floored at one.
 fn secs(ms: u64) -> String {
-    format!("{} с", ms.div_ceil(1000).max(1))
+    format!("{}s", ms.div_ceil(1000).max(1))
 }
 
 #[cfg(test)]
@@ -164,9 +164,9 @@ mod tests {
 
     #[test]
     fn rounds_retry_delay_up_to_whole_seconds() {
-        assert_eq!(secs(4000), "4 с");
-        assert_eq!(secs(4500), "5 с");
-        assert_eq!(secs(200), "1 с");
+        assert_eq!(secs(4000), "4s");
+        assert_eq!(secs(4500), "5s");
+        assert_eq!(secs(200), "1s");
     }
 
     #[test]
