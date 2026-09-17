@@ -69,22 +69,38 @@ fn PeerCard(
 }
 
 #[component]
-fn SelfPanel(self_name: String) -> impl IntoView {
-    let muted = RwSignal::new(false);
+fn SelfPanel(
+    self_name: String,
+    muted: Signal<bool>,
+    /// The gate is open and audio is going out right now (spec 0013).
+    transmitting: Signal<bool>,
+    on_mute: Callback<()>,
+    on_voice_settings: Callback<()>,
+) -> impl IntoView {
     let name = self_name.clone();
     view! {
         <div class="self-panel">
             <Avatar name=self_name size=30.0 ring_bg="var(--bg-elevated)" />
             <span class="t-ui-strong self-panel__name">{name}</span>
+            <span
+                class="self-panel__live"
+                class:self-panel__live--on=move || transmitting.get()
+                title=move || if transmitting.get() { "Transmitting" } else { "Silent" }
+            ></span>
             <IconButton
                 icon=Icon::Mic
-                label="Microphone"
+                label=move || if muted.get() { "Unmute" } else { "Mute" }
                 kind=Signal::derive(move || {
                     if muted.get() { IconButtonKind::Danger } else { IconButtonKind::Toggled }
                 })
-                on_click=Callback::new(move |()| muted.update(|m| *m = !*m))
+                on_click=on_mute
             />
-            <IconButton icon=Icon::Headphones label="Sound" kind=IconButtonKind::Sm />
+            <IconButton
+                icon=Icon::Headphones
+                label="Voice settings"
+                kind=IconButtonKind::Sm
+                on_click=on_voice_settings
+            />
         </div>
     }
 }
@@ -98,6 +114,10 @@ pub fn Shell(
     on_settings: Callback<()>,
     #[prop(into)] in_call: Signal<bool>,
     on_call: Callback<()>,
+    #[prop(into)] muted: Signal<bool>,
+    #[prop(into)] transmitting: Signal<bool>,
+    on_mute: Callback<()>,
+    on_voice_settings: Callback<()>,
     children: Children,
 ) -> impl IntoView {
     view! {
@@ -123,7 +143,13 @@ pub fn Shell(
                         on_call=on_call
                     />
                     <div class="shell__spacer"></div>
-                    <SelfPanel self_name=self_name />
+                    <SelfPanel
+                        self_name=self_name
+                        muted=muted
+                        transmitting=transmitting
+                        on_mute=on_mute
+                        on_voice_settings=on_voice_settings
+                    />
                 </aside>
                 <main class="shell__main">{children()}</main>
             </div>

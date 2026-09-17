@@ -13,6 +13,7 @@ use crate::ui::call::{CallOutcome, CallPane};
 use crate::ui::chat::{Composer, MessageList};
 use crate::ui::settings::{SettingsPanel, SettingsView};
 use crate::ui::shell::Shell;
+use crate::ui::voice_settings::{stored_key, VoiceSettingsPanel};
 
 const PEER_NAME: &str = "Peer";
 /// Screenfuls of history: the first load, then one page per scroll to the top.
@@ -87,6 +88,19 @@ struct CallAudio {
     muted: bool,
     local_speaking: bool,
     remote_speaking: bool,
+    /// The gate is open and audio is actually going out (spec 0013).
+    #[serde(default)]
+    transmitting: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct InputLevel {
+    dbfs: f32,
+}
+
+#[derive(serde::Serialize)]
+struct PressedArgs {
+    pressed: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -119,6 +133,7 @@ pub fn App() -> impl IntoView {
     watch_focus(focused);
     let settings = RwSignal::new(None::<SettingsView>);
     let show_settings = RwSignal::new(false);
+    let voice_tab = RwSignal::new(false);
 
     let refresh_settings = Callback::new(move |()| {
         leptos::task::spawn_local(async move {
@@ -243,6 +258,12 @@ pub fn App() -> impl IntoView {
     let muted = RwSignal::new(false);
     let local_speaking = RwSignal::new(false);
     let remote_speaking = RwSignal::new(false);
+    let transmitting = RwSignal::new(false);
+    let input_level = RwSignal::new(-70.0_f32);
+    // Push-to-talk key for the focused window; the core only hears pressed
+    // and released (spec 0013).
+    let ptt_key = RwSignal::new(stored_key());
+    watch_push_to_talk(ptt_key);
 
     leptos::task::spawn_local(async move {
         if let Ok(current) = bridge::invoke::<_, CallState>("call_state", &()).await {
@@ -285,7 +306,10 @@ pub fn App() -> impl IntoView {
         muted.set(audio.muted);
         local_speaking.set(audio.local_speaking);
         remote_speaking.set(audio.remote_speaking);
+        transmitting.set(audio.transmitting);
     });
+
+    bridge::listen::<InputLevel>("input-level", move |level| input_level.set(level.dbfs));
 
     bridge::listen::<CallAudioError>("call-audio-error", move |err| {
         web_sys::console::error_1(&format!("audio: {}", err.message).into());
@@ -334,6 +358,13 @@ pub fn App() -> impl IntoView {
             on_settings=Callback::new(move |()| show_settings.update(|open| *open = !*open))
             in_call=in_call
             on_call=on_call
+            muted=muted
+            transmitting=transmitting
+            on_mute=on_mute
+            on_voice_settings=Callback::new(move |()| {
+                voice_tab.set(true);
+                show_settings.set(true);
+            })
         >
             <Show
                 when=move || settings_open.get()
@@ -390,15 +421,75 @@ pub fn App() -> impl IntoView {
                     }
                 }
             >
-                <SettingsPanel
-                    settings=settings.into()
-                    on_saved=Callback::new(move |()| {
-                        show_settings.set(false);
-                        refresh_settings.run(());
-                    })
-                />
+                <div>
+                    <div class="settings__tabs">
+                        <button
+                            class="settings__tab t-ui-strong"
+                            class:settings__tab--active=move || !voice_tab.get()
+                            type="button"
+                            on:click=move |_| voice_tab.set(false)
+                        >
+                            "Connection"
+                        </button>
+                        <button
+                            class="settings__tab t-ui-strong"
+                            class:settings__tab--active=move || voice_tab.get()
+                            type="button"
+                            on:click=move |_| voice_tab.set(true)
+                        >
+                            "Voice"
+                        </button>
+                    </div>
+                    <Show
+                        when=move || voice_tab.get()
+                        fallback=move || {
+                            view! {
+                                <SettingsPanel
+                                    settings=settings.into()
+                                    on_saved=Callback::new(move |()| {
+                                        show_settings.set(false);
+                                        refresh_settings.run(());
+                                    })
+                                />
+                            }
+                        }
+                    >
+                        <VoiceSettingsPanel
+                            input_level=input_level.into()
+                            transmitting=transmitting.into()
+                            ptt_key=ptt_key
+                        />
+                    </Show>
+                </div>
             </Show>
         </Shell>
+    }
+}
+
+/// Reports the push-to-talk key going down and up while the window has focus.
+/// The key itself lives in the UI (spec 0013); the core only learns the state.
+fn watch_push_to_talk(ptt_key: RwSignal<Option<String>>) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let send = |pressed: bool| {
+        leptos::task::spawn_local(async move {
+            let _: Result<(), CommandError> =
+                bridge::invoke("set_push_to_talk", &PressedArgs { pressed }).await;
+        });
+    };
+    for (event, pressed) in [("keydown", true), ("keyup", false)] {
+        let handler =
+            Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+                // Auto-repeat would re-send "pressed" every few milliseconds.
+                if ev.repeat() || ptt_key.get_untracked().as_deref() != Some(&ev.code()) {
+                    return;
+                }
+                ev.prevent_default();
+                send(pressed);
+            });
+        let _ = window.add_event_listener_with_callback(event, handler.as_ref().unchecked_ref());
+        handler.forget();
     }
 }
 
