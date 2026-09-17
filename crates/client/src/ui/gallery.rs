@@ -6,6 +6,7 @@ use leptos::prelude::*;
 use crate::call::{CallState, EndReason};
 use crate::chat::{Author, Message, Status};
 use crate::connection::{ConnectionState, FailureReason};
+use crate::sound::{self, Signal as Sound};
 
 use super::avatar::{Avatar, Presence};
 use super::call::{CallOutcome, CallPane};
@@ -117,6 +118,34 @@ fn mock_messages() -> Vec<Message> {
             }),
         ),
     ]
+}
+
+#[component]
+fn SoundCase() -> impl IntoView {
+    let signals = [
+        ("рингтон", Sound::Ring),
+        ("гудок вызова", Sound::Dial),
+        ("соединились", Sound::Connected),
+        ("звонок завершён", Sound::Ended),
+        ("сообщение", Sound::Message),
+    ];
+    view! {
+        {signals
+            .into_iter()
+            .map(|(label, signal)| {
+                view! {
+                    <button
+                        class="peer__call t-ui-strong"
+                        style="width:auto; margin:0; padding:0 12px; height:28px;"
+                        type="button"
+                        on:click=move |_| sound::play(signal)
+                    >
+                        {label}
+                    </button>
+                }
+            })
+            .collect_view()}
+    }
 }
 
 #[component]
@@ -342,6 +371,10 @@ pub fn Gallery() -> impl IntoView {
 
             <Section title="Shell" note="title 44 · sidebar 264 · main flex 1 — all six connection states">
                 <ShellCase />
+            </Section>
+
+            <Section title="Sound" note="сигналы 0012 — синтез WebAudio, без аудиофайлов">
+                <SoundCase />
             </Section>
 
             <Section title="Call" note="плитки r-arch · таймер из since · контролы 46 · входящий вызов">

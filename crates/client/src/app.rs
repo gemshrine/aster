@@ -1,11 +1,14 @@
 //! Wiring between the core (spec 0009) and the UI (spec 0008).
 
 use leptos::prelude::*;
+use wasm_bindgen::prelude::Closure;
+use wasm_bindgen::JsCast;
 
 use crate::bridge::{self, CommandError};
 use crate::call::{CallState, EndReason};
 use crate::chat::{Author, Message, Status};
 use crate::connection::ConnectionState;
+use crate::sound::{self, Loop, Signal as Sound};
 use crate::ui::call::{CallOutcome, CallPane};
 use crate::ui::chat::{Composer, MessageList};
 use crate::ui::settings::{SettingsPanel, SettingsView};
@@ -92,6 +95,11 @@ struct CallAudioError {
 }
 
 #[derive(serde::Serialize)]
+struct FocusArgs {
+    focused: bool,
+}
+
+#[derive(serde::Serialize)]
 struct MuteArgs {
     muted: bool,
 }
@@ -105,6 +113,10 @@ struct SendArgs {
 pub fn App() -> impl IntoView {
     let state = RwSignal::new(ConnectionState::NotConfigured);
     let messages = RwSignal::new(Vec::<Message>::new());
+    // The core counts unread messages and needs to know when the user is
+    // actually looking at the window (spec 0012).
+    let focused = RwSignal::new(true);
+    watch_focus(focused);
     let settings = RwSignal::new(None::<SettingsView>);
     let show_settings = RwSignal::new(false);
 
@@ -198,7 +210,16 @@ pub fn App() -> impl IntoView {
     });
 
     bridge::listen::<CoreMessage>("message-upserted", move |message| {
-        messages.update(|messages| upsert(messages, message.into()));
+        let message: Message = message.into();
+        // Only a new incoming message earns a sound, and only when the window
+        // is in the background — a status change is not news (spec 0012).
+        let announce = message.author == Author::Peer
+            && !focused.get_untracked()
+            && !messages.read_untracked().iter().any(|m| m.id == message.id);
+        if announce {
+            sound::play(Sound::Message);
+        }
+        messages.update(|messages| upsert(messages, message));
     });
 
     let on_send = Callback::new(move |body: String| {
@@ -231,7 +252,25 @@ pub fn App() -> impl IntoView {
         }
     });
 
+    // Attention signals (spec 0012). The ringtone and the dial tone repeat
+    // until the call moves on, so they live in a slot that dropping silences.
+    let ringer = StoredValue::new(None::<Loop>);
+    let silence = move || ringer.set_value(None);
+
     bridge::listen::<CallState>("call-state", move |next| {
+        match &next {
+            CallState::Ringing => ringer.set_value(Some(Loop::start(Sound::Ring, 900.0))),
+            CallState::Calling => ringer.set_value(Some(Loop::start(Sound::Dial, 2200.0))),
+            CallState::Connected { .. } => {
+                silence();
+                sound::play(Sound::Connected);
+            }
+            CallState::Ended { .. } => {
+                silence();
+                sound::play(Sound::Ended);
+            }
+            CallState::Connecting | CallState::Idle => silence(),
+        }
         // `ended` is momentary: the core returns to idle right after it, so
         // the outcome lives here until the next call or a dismissal.
         if let CallState::Ended { reason } = next {
@@ -362,6 +401,29 @@ pub fn App() -> impl IntoView {
                 />
             </Show>
         </Shell>
+    }
+}
+
+/// Mirrors window focus into `focused` and tells the core about it.
+fn watch_focus(focused: RwSignal<bool>) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    for (event, value) in [("focus", true), ("blur", false)] {
+        let handler = Closure::<dyn FnMut()>::new(move || {
+            if focused.get_untracked() == value {
+                return;
+            }
+            focused.set(value);
+            leptos::task::spawn_local(async move {
+                // The command lands with the tray work (#61); until then the
+                // bridge just reports that the core does not know it.
+                let _: Result<(), CommandError> =
+                    bridge::invoke("set_window_focused", &FocusArgs { focused: value }).await;
+            });
+        });
+        let _ = window.add_event_listener_with_callback(event, handler.as_ref().unchecked_ref());
+        handler.forget();
     }
 }
 
