@@ -8,11 +8,13 @@ name = "client_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
+aec3 = "0.4.0"
 async-trait = "0.1.92"
 bytes = "1.12.1"
 cpal = { version = "0.18", optional = true, features = ["pulseaudio"] }
 fastrand = "2.5.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+nnnoiseless = { version = "0.5.2", default-features = false }
 opus-pure = "0.2"
 protocol = { version = "0.1.0", path = "../../protocol" }
 rtc = "0.20.5"

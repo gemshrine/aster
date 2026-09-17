@@ -25,6 +25,8 @@ use tokio::sync::mpsc;
 /// Plays a sine into capture and records everything handed to playback.
 struct ToneBackend {
     freq: f32,
+    /// How loud the speaker leaks back into the microphone.
+    echo_gain: f32,
     played: Arc<Mutex<Vec<f32>>>,
     /// `(direction, resolved device)` for every opened stream, in order.
     opened: Arc<Mutex<Vec<(&'static str, String)>>>,
@@ -106,8 +108,20 @@ impl AudioBackend for ToneBackend {
     fn capture(&self, device: Option<&str>, mut sink: CaptureSink) -> Result<Opened, String> {
         let fallback = self.resolve("capture", &INPUTS, device);
         let mut sine = Sine::new(self.freq, 0.3);
+        let (played, echo_gain) = (self.played.clone(), self.echo_gain);
         Ok(Opened {
-            stream: every_frame(move || sink(&sine.next_frame())),
+            stream: every_frame(move || {
+                let mut frame = sine.next_frame();
+                let played = played.lock().unwrap();
+                if echo_gain > 0.0 && played.len() >= FRAME {
+                    let echo = &played[played.len() - FRAME..];
+                    for (sample, echo) in frame.iter_mut().zip(echo) {
+                        *sample += echo_gain * echo;
+                    }
+                }
+                drop(played);
+                sink(&frame)
+            }),
             fallback,
         })
     }
@@ -135,6 +149,17 @@ struct Peer {
 
 impl Peer {
     async fn online(addr: SocketAddr, token: &str, freq: f32, config: CallConfig) -> Self {
+        Self::with_audio(addr, token, freq, config, 0.0, VoiceSettings::default()).await
+    }
+
+    async fn with_audio(
+        addr: SocketAddr,
+        token: &str,
+        freq: f32,
+        config: CallConfig,
+        echo_gain: f32,
+        settings: VoiceSettings,
+    ) -> Self {
         let (core_tx, mut core_events) = mpsc::unbounded_channel();
         let (signaling, actor) = signaling(core_tx, fast_timing());
         tokio::spawn(actor);
@@ -143,17 +168,12 @@ impl Peer {
         let opened = Arc::new(Mutex::new(Vec::new()));
         let backend = Arc::new(ToneBackend {
             freq,
+            echo_gain,
             played: played.clone(),
             opened: opened.clone(),
         });
         let (voice_tx, events) = mpsc::unbounded_channel();
-        let (voice, actor) = voice(
-            signaling.clone(),
-            backend,
-            voice_tx,
-            config,
-            VoiceSettings::default(),
-        );
+        let (voice, actor) = voice(signaling.clone(), backend, voice_tx, config, settings);
         tokio::spawn(actor);
 
         let forward = voice.clone();
@@ -292,7 +312,11 @@ async fn both_online(config: CallConfig) -> (Peer, Peer) {
 }
 
 async fn connected_call() -> (Peer, Peer) {
-    let (mut alice, mut bob) = both_online(test_config()).await;
+    let (alice, bob) = both_online(test_config()).await;
+    connect(alice, bob).await
+}
+
+async fn connect(mut alice: Peer, mut bob: Peer) -> (Peer, Peer) {
     alice.voice.start_call().await.unwrap();
     alice.wait_state(CallState::Calling).await;
     bob.wait_state(CallState::Ringing).await;
@@ -448,8 +472,8 @@ async fn output_device_switches_during_a_call() {
 
     bob.voice
         .set_settings(VoiceSettings {
-            input_device: None,
             output_device: Some("spk-b".into()),
+            ..VoiceSettings::default()
         })
         .await
         .unwrap();
@@ -485,7 +509,7 @@ async fn missing_device_falls_back_without_ending_the_call() {
     bob.voice
         .set_settings(VoiceSettings {
             input_device: Some("unplugged-headset".into()),
-            output_device: None,
+            ..VoiceSettings::default()
         })
         .await
         .unwrap();
@@ -507,6 +531,79 @@ async fn missing_device_falls_back_without_ending_the_call() {
     alice
         .wait(|e| matches!(e, VoiceEvent::Audio(a) if a.remote_speaking))
         .await;
+}
+
+/// Bob's speaker leaks alice's 440 Hz back into his microphone. How much of
+/// it comes back to alice's speaker, relative to bob's own 1000 Hz tone.
+async fn echo_returned(echo_cancellation: bool) -> f32 {
+    let addr = spawn_server(QueueLimits::default()).await;
+    let alice = Peer::online(addr, ALICE, 440.0, test_config()).await;
+    let settings = VoiceSettings {
+        echo_cancellation,
+        ..VoiceSettings::default()
+    };
+    let bob = Peer::with_audio(addr, BOB, 1000.0, test_config(), 0.8, settings).await;
+    tokio::time::timeout(WAIT, async {
+        while !matches!(
+            alice.signaling.state(),
+            ConnectionState::Connected {
+                peer_online: true,
+                ..
+            }
+        ) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("peer did not come online");
+    let (alice, _bob) = connect(alice, bob).await;
+
+    alice.wait_for_tone(1000.0, 400).await;
+    // Give AEC3 time to converge on the echo path.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let tail = alice.played_tail(1000);
+    tone_ratio(&tail, 440.0) / tone_ratio(&tail, 1000.0)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn echo_cancellation_keeps_the_callers_voice_from_coming_back() {
+    let without = echo_returned(false).await;
+    let with = echo_returned(true).await;
+    assert!(without > 0.05, "no echo to cancel in the setup: {without}");
+    assert!(with < without / 20.0, "echo {without} -> {with}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn input_monitor_reports_levels_outside_a_call() {
+    let addr = spawn_server(QueueLimits::default()).await;
+    let mut alice = Peer::online(addr, ALICE, 440.0, test_config()).await;
+
+    alice.voice.set_input_monitor(true).await.unwrap();
+    let mut levels = Vec::new();
+    while levels.len() < 10 {
+        if let VoiceEvent::InputLevel { dbfs } = alice
+            .wait(|e| matches!(e, VoiceEvent::InputLevel { .. }))
+            .await
+        {
+            levels.push(dbfs);
+        }
+    }
+    assert_eq!(alice.opened(), [("capture", "mic-a".to_string())]);
+    let loudest = levels.iter().cloned().fold(f32::MIN, f32::max);
+    assert!(loudest > -30.0, "the tone should register: {levels:?}");
+
+    // Nothing is sent: the peer is not even in a call.
+    assert_eq!(alice.voice.state(), CallState::Idle);
+
+    alice.voice.set_input_monitor(false).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    while alice.events.try_recv().is_ok() {}
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(
+        !std::iter::from_fn(|| alice.events.try_recv().ok())
+            .any(|e| matches!(e, VoiceEvent::InputLevel { .. })),
+        "levels keep coming after the monitor is off"
+    );
 }
 
 #[test]

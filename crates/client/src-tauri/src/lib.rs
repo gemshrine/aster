@@ -117,6 +117,7 @@ pub fn run() {
             commands::list_audio_devices,
             commands::get_voice_settings,
             commands::set_voice_settings,
+            commands::set_input_monitor,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aster client");
