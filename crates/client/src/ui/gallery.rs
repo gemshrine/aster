@@ -198,7 +198,7 @@ fn CallCase() -> impl IntoView {
             <div style="height:520px; border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; background:var(--bg);">
                 <CallPane
                     state=state.into()
-                    peer_name="Kent"
+                    peer_name="Peer"
                     self_name="You"
                     muted=muted
                     local_speaking=Signal::derive(|| false)
@@ -269,10 +269,10 @@ fn ChatCase() -> impl IntoView {
             </div>
             <div style="height:520px; border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; background:var(--bg);">
                 <div class="chat-pane">
-                    <MessageList messages=messages.into() peer_name="Kent" self_name="You" />
+                    <MessageList messages=messages.into() peer_name="Peer" self_name="You" />
                     <Composer
                         disabled=offline
-                        placeholder="Message Kent"
+                        placeholder="Message"
                         on_send=on_send
                     />
                 </div>
@@ -337,7 +337,7 @@ fn ShellCase() -> impl IntoView {
                 <div style="height:100%; zoom:0.72;">
                     <Shell
                         state=state.into()
-                        peer_name="Kent"
+                        peer_name="Peer"
                         self_name="You"
                         on_settings=Callback::new(|()| ())
                         in_call=false

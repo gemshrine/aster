@@ -96,14 +96,14 @@ impl Attention {
         }
         let count = self.unread.fetch_add(1, Ordering::Relaxed) + 1;
         self.publish(app, count);
-        notify(app, "Kent", &shorten(&message.body));
+        notify(app, "New message", &shorten(&message.body));
     }
 
     /// An incoming call always notifies, focused or not: it is the one thing
     /// that cannot wait.
     pub fn call(&self, app: &AppHandle, state: &CallState) {
         if matches!(state, CallState::Ringing) {
-            notify(app, "Incoming call", "Kent is calling");
+            notify(app, "Incoming call", "Someone is calling you");
         }
     }
 

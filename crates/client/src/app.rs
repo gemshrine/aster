@@ -14,7 +14,7 @@ use crate::ui::chat::{Composer, MessageList};
 use crate::ui::settings::{SettingsPanel, SettingsView};
 use crate::ui::shell::Shell;
 
-const PEER_NAME: &str = "Kent";
+const PEER_NAME: &str = "Peer";
 /// Screenfuls of history: the first load, then one page per scroll to the top.
 const FIRST_PAGE: u32 = 200;
 const OLDER_PAGE: u32 = 100;
@@ -367,7 +367,7 @@ pub fn App() -> impl IntoView {
                                         }}
                                         <Composer
                                             disabled=offline
-                                            placeholder="Message Kent"
+                                            placeholder="Message"
                                             on_send=on_send
                                         />
                                     </div>
