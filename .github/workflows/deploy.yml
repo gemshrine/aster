@@ -1,0 +1,98 @@
+name: Deploy
+
+# specs/0014-auto-deploy.md: build the signaling-server image here, the VPS
+# only pulls it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/gemshrine/aster-signaling-server
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      deploy: ${{ steps.configured.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Secrets are not allowed in job conditions, so the check is a step.
+      - id: configured
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          if [ -n "$DEPLOY_HOST" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "DEPLOY_HOST is not set: image published, deploy skipped"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: image
+    if: needs.image.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Pull the image and restart
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "ASTER_IMAGE_TAG=$GITHUB_SHA bash -s" <<'EOF'
+          set -euo pipefail
+          cd ~/aster
+          git fetch --quiet origin
+          # The exact commit, so re-running an old deploy rolls back.
+          git reset --hard "$ASTER_IMAGE_TAG"
+          cd deploy
+          docker compose pull signaling-server
+          docker compose up -d
+          EOF
+
+      - name: Check health
+        env:
+          ASTER_DOMAIN: ${{ secrets.ASTER_DOMAIN }}
+        run: |
+          for attempt in $(seq 1 12); do
+            if curl -fsS --max-time 5 "https://$ASTER_DOMAIN/health"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "https://$ASTER_DOMAIN/health did not answer within 60 s" >&2
+          exit 1

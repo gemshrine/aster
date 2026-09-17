@@ -2,6 +2,9 @@ name: aster
 
 services:
   signaling-server:
+    # Auto deploy pulls this tag from GHCR; `up -d --build` still builds
+    # locally (specs/0014-auto-deploy.md).
+    image: ghcr.io/gemshrine/aster-signaling-server:${ASTER_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile

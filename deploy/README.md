@@ -49,6 +49,8 @@ docker compose logs -f signaling-server
 
 ## Обновление
 
+Автоматически — после каждого мержа в `main` (см. «Автодеплой» ниже). Вручную, со сборкой на самом VPS:
+
 ```bash
 cd aster && git pull
 cd deploy && docker compose up -d --build
@@ -67,3 +69,35 @@ cd deploy && docker compose up -d --build
 ```
 external-ip=<публичный IP>/<приватный IP>
 ```
+
+## Автодеплой
+
+`.github/workflows/deploy.yml` (`specs/0014-auto-deploy.md`) на каждый push в `main` собирает образ `ghcr.io/gemshrine/aster-signaling-server:<sha>`, заходит на VPS по SSH, переключает репозиторий на этот коммит, делает `docker compose pull` + `up -d` и проверяет `https://$ASTER_DOMAIN/health`. Пока секреты не заданы, публикуется только образ.
+
+Разовая настройка:
+
+1. **Ключ только для деплоя** (локально):
+   ```bash
+   ssh-keygen -t ed25519 -N '' -C aster-deploy -f aster-deploy
+   ```
+   `aster-deploy.pub` — дописать на VPS в `~/.ssh/authorized_keys` пользователя, который в группе `docker` и владеет `~/aster`.
+2. **Отпечаток хоста:** `ssh-keyscan -t ed25519 <host>` — весь вывод.
+3. **VPS видит GHCR:** репозиторий приватный, пакет тоже. Создать на GitHub fine-grained/classic токен только с `read:packages` и на VPS выполнить
+   ```bash
+   echo <token> | docker login ghcr.io -u gemshrine --password-stdin
+   ```
+   Токен остаётся в `~/.docker/config.json` на VPS, в GitHub он не нужен.
+4. **VPS видит репозиторий:** `git -C ~/aster fetch` должен работать без пароля (deploy key на чтение или https-токен в remote).
+5. **Секреты** в GitHub → Settings → Secrets and variables → Actions:
+
+   | Секрет | Значение |
+   |---|---|
+   | `DEPLOY_HOST` | адрес VPS |
+   | `DEPLOY_USER` | пользователь из шага 1 |
+   | `DEPLOY_SSH_KEY` | содержимое приватного `aster-deploy` |
+   | `DEPLOY_KNOWN_HOSTS` | вывод из шага 2 |
+   | `ASTER_DOMAIN` | домен из `deploy/.env` |
+
+Проверка: Actions → Deploy → Run workflow. **Откат:** открыть успешный запуск на нужном коммите → Re-run all jobs: VPS вернётся ровно на тот коммит и образ.
+
+`caddy` и `coturn` автоматически не обновляются: `docker compose pull caddy coturn && docker compose up -d`.
