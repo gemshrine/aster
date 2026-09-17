@@ -1,7 +1,7 @@
 //! Call state machine and WebRTC session, see `specs/0011-voice-core.md`.
 
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,9 +29,11 @@ use webrtc::peer_connection::{
 use webrtc::rtp_transceiver::RtpSender;
 
 use super::audio::{AudioBackend, AudioStream};
-use super::media::{Encoder, Frame, JitterBuffer, LevelMeter, Vad, FRAME, SILENCE};
+use super::media::{
+    Encoder, Frame, Gate, GateInput, JitterBuffer, LevelMeter, Vad, FRAME, SILENCE,
+};
 use super::processing::{Dsp, DspInput, ProcessingConfig};
-use super::settings::VoiceSettings;
+use super::settings::{InputMode, VoiceSettings};
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -63,6 +65,18 @@ pub struct AudioStatus {
     pub muted: bool,
     pub local_speaking: bool,
     pub remote_speaking: bool,
+    /// The gate is open and not muted: the microphone reaches the peer.
+    pub transmitting: bool,
+}
+
+/// Where a push-to-talk press comes from; the key counts as held while it is
+/// held in any source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushToTalkSource {
+    /// The focused window, via `set_push_to_talk`.
+    Window,
+    /// The portal or a global shortcut.
+    Global,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -142,9 +156,19 @@ enum PcEvent {
 pub struct VoiceHandle {
     inputs: mpsc::UnboundedSender<Input>,
     state: watch::Receiver<CallState>,
+    controls: Arc<Controls>,
 }
 
 impl VoiceHandle {
+    /// Takes effect on the next frame; cheap enough for key repeat.
+    pub fn set_push_to_talk(&self, source: PushToTalkSource, pressed: bool) {
+        let flag = match source {
+            PushToTalkSource::Window => &self.controls.window_pressed,
+            PushToTalkSource::Global => &self.controls.global_pressed,
+        };
+        flag.store(pressed, Ordering::Relaxed);
+    }
+
     pub fn state(&self) -> CallState {
         self.state.borrow().clone()
     }
@@ -217,9 +241,12 @@ pub fn voice(
     let (inputs_tx, inputs) = mpsc::unbounded_channel();
     let (pc_tx, pc_rx) = mpsc::unbounded_channel();
     let (state_tx, state) = watch::channel(CallState::Idle);
+    let controls = Arc::new(Controls::default());
+    controls.apply(&settings);
     let handle = VoiceHandle {
         inputs: inputs_tx,
         state,
+        controls: controls.clone(),
     };
     let actor = Actor {
         inputs,
@@ -237,8 +264,43 @@ pub fn voice(
         audio: AudioStatus::default(),
         monitor: Arc::new(AtomicBool::new(false)),
         idle_monitor: None,
+        controls,
     };
     (handle, actor.run())
+}
+
+/// Gate settings and key state, shared by the handle, the actor and the
+/// encoder; they outlive any single call.
+#[derive(Default)]
+struct Controls {
+    push_to_talk: AtomicBool,
+    release_delay_ms: AtomicU32,
+    vad_threshold_dbfs: AtomicI32,
+    window_pressed: AtomicBool,
+    global_pressed: AtomicBool,
+}
+
+impl Controls {
+    fn apply(&self, settings: &VoiceSettings) {
+        self.push_to_talk.store(
+            settings.input_mode == InputMode::PushToTalk,
+            Ordering::Relaxed,
+        );
+        self.release_delay_ms
+            .store(settings.ptt_release_delay_ms, Ordering::Relaxed);
+        self.vad_threshold_dbfs
+            .store(settings.vad_threshold_dbfs, Ordering::Relaxed);
+    }
+
+    fn gate_input(&self) -> GateInput {
+        GateInput {
+            push_to_talk: self.push_to_talk.load(Ordering::Relaxed),
+            pressed: self.window_pressed.load(Ordering::Relaxed)
+                || self.global_pressed.load(Ordering::Relaxed),
+            release_delay_ms: self.release_delay_ms.load(Ordering::Relaxed),
+            vad_threshold_dbfs: self.vad_threshold_dbfs.load(Ordering::Relaxed) as f32,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -246,7 +308,7 @@ struct Flags {
     muted: AtomicBool,
     local_speaking: AtomicBool,
     remote_speaking: AtomicBool,
-    vad_threshold_dbfs: AtomicI32,
+    transmitting: AtomicBool,
 }
 
 struct Session {
@@ -376,6 +438,7 @@ struct Actor {
     monitor: Arc<AtomicBool>,
     /// The monitor's own microphone while no call has media.
     idle_monitor: Option<Capture>,
+    controls: Arc<Controls>,
 }
 
 impl Actor {
@@ -819,9 +882,6 @@ impl Actor {
 
         let flags = Arc::new(Flags::default());
         flags.muted.store(self.muted, Ordering::Relaxed);
-        flags
-            .vad_threshold_dbfs
-            .store(self.settings.vad_threshold_dbfs, Ordering::Relaxed);
         Ok(Session {
             generation,
             pc,
@@ -859,20 +919,21 @@ impl Actor {
 
         let track = session.track.clone();
         let flags = session.flags.clone();
+        let controls = self.controls.clone();
         let encoder = tokio::spawn(async move {
             let (Some(payload_type), Some(ssrc)) = (payload_type, ssrc) else {
                 return;
             };
             let mut encoder = Encoder::new();
-            let mut vad = Vad::default();
+            let mut gate = Gate::default();
             while let Some(frame) = frames_rx.recv().await {
-                vad.set_threshold(flags.vad_threshold_dbfs.load(Ordering::Relaxed) as f32);
-                let speaking = vad.update(&frame);
-                let muted = flags.muted.load(Ordering::Relaxed);
+                let state = gate.update(&frame, controls.gate_input());
+                let transmitting = state.open && !flags.muted.load(Ordering::Relaxed);
+                flags.transmitting.store(transmitting, Ordering::Relaxed);
                 flags
                     .local_speaking
-                    .store(speaking && !muted, Ordering::Relaxed);
-                let input = if muted || !speaking { &SILENCE } else { &frame };
+                    .store(state.speaking && transmitting, Ordering::Relaxed);
+                let input = if transmitting { &frame } else { &SILENCE };
                 let sample = Sample {
                     data: Bytes::from(encoder.encode(input)),
                     duration: Duration::from_millis((FRAME * 1000 / 48_000) as u64),
@@ -945,12 +1006,7 @@ impl Actor {
 
     fn apply_settings(&mut self, settings: VoiceSettings) {
         let previous = std::mem::replace(&mut self.settings, settings);
-        if let Some(session) = self.phase.session_mut() {
-            session
-                .flags
-                .vad_threshold_dbfs
-                .store(self.settings.vad_threshold_dbfs, Ordering::Relaxed);
-        }
+        self.controls.apply(&self.settings);
 
         let processing = ProcessingConfig::from(&self.settings);
         let capture = match &mut self.phase {
@@ -999,6 +1055,7 @@ impl Actor {
                 muted: self.muted,
                 local_speaking: session.flags.local_speaking.load(Ordering::Relaxed),
                 remote_speaking: session.flags.remote_speaking.load(Ordering::Relaxed),
+                transmitting: session.flags.transmitting.load(Ordering::Relaxed),
             },
             _ => AudioStatus {
                 muted: self.muted,

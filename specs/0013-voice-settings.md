@@ -29,7 +29,8 @@
   "auto_gain": true,
   "input_mode": "voice_activity",
   "vad_threshold_dbfs": -45,
-  "ptt_release_delay_ms": 200
+  "ptt_release_delay_ms": 200,
+  "ptt_shortcut": null
 }
 ```
 
@@ -83,19 +84,24 @@
 
 `muted` сильнее режима: при mute гейт закрыт всегда.
 
+- Удержание считается кадрами: `ceil(ptt_release_delay_ms / 20)` кадров после отпускания.
+- В `push_to_talk` при нажатой клавише уходит всё, что слышит микрофон, VAD гейт не закрывает (тихая речь не режется).
+- `local_speaking` из `0011` теперь значит «VAD слышит голос **и** он уходит собеседнику»: в PTT без нажатия индикатор не горит.
+
 ### Клавиша push-to-talk
 
 Нажатие приходит из двух источников, гейт открыт, если нажато в любом:
 
-1. **Окно в фокусе:** UI ловит `keydown`/`keyup` выбранной клавиши и вызывает `set_push_to_talk { pressed }`. Работает везде. Клавиша хранится в UI (`localStorage`), ядру она не нужна.
+1. **Окно в фокусе:** UI ловит `keydown`/`keyup` выбранной клавиши и вызывает `set_push_to_talk { pressed }`. Работает везде. Клавиша хранится в UI (`localStorage`), ядру она не нужна. `set_window_focused { focused: false }` отпускает этот источник: отпускание вне окна до UI не дойдёт.
 2. **Глобально:**
    - **Linux Wayland** — портал `org.freedesktop.portal.GlobalShortcuts` (через `ashpd`). Ядро регистрирует шорткат `push-to-talk` с описанием «Push-to-talk» и получает `Activated`/`Deactivated` как нажатие и отпускание. Саму клавишу назначает пользователь в композиторе: в GNOME/KDE система показывает диалог, в Hyprland — строка в конфиге:
      ```
-     bind = , mouse:276, global, dev.gemshrine.aster:push-to-talk
+     bind = , mouse:276, global, :push-to-talk
      ```
-     `mouse:276` — боковая кнопка мыши, для клавиатуры, например, `bind = , F13, global, …`.
-   - **X11, Windows, macOS** — `tauri-plugin-global-shortcut` с сочетанием из поля `ptt_shortcut` (`"F13"`, `"Alt+Space"` …). Глобальный хук получает нажатие и отпускание. На Wayland этот путь не используется: X11-перехват там клавиш не видит.
+     `mouse:276` — боковая кнопка мыши, для клавиатуры, например, `bind = , F13, global, …`. Префикс перед `:` — app id. Хост-приложение (не flatpak) сообщает его порталу через `org.freedesktop.host.portal.Registry`, а тот принимает id, только если установлен `dev.gemshrine.aster.desktop`. Без него (dev-сборка, бинарник без пакета) id пустой и бинд — `global, :push-to-talk`; с установленным desktop-файлом — `global, dev.gemshrine.aster:push-to-talk`. Проверено в Hyprland: `hyprctl globalshortcuts` показывает шорткат, `hyprctl dispatch global :push-to-talk` доходит до ядра как `Activated`.
+   - **X11, Windows, macOS** — `tauri-plugin-global-shortcut` с сочетанием из поля `ptt_shortcut` (`"F13"`, `"Alt+Space"` …). Глобальный хук получает нажатие и отпускание. На Wayland этот путь не используется: X11-перехват там клавиш не видит. Плагин подключается в `setup` и только не на Wayland: без X-дисплея его инициализация падает, и приложение не должно из-за этого не запуститься.
    - Если глобальный источник недоступен (нет портала, сочетание занято), работает только режим окна, UI показывает предупреждение из `push-to-talk-status`.
+   - Глобальный источник регистрируется только в режиме `push_to_talk`: в GNOME/KDE привязка открывает системный диалог, и пользователю VAD он не нужен. В `voice_activity` статус — `unavailable` с `reason: "push-to-talk is off"`, сессия портала закрывается, сочетание снимается.
 
 Поле в `voice.json` для не-Wayland: `"ptt_shortcut": "F13"` (`null` — глобальной клавиши нет).
 

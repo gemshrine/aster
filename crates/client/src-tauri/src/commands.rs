@@ -11,8 +11,9 @@ use crate::core::chat::{Chat, ChatError, Message};
 use crate::core::settings::Settings;
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 use crate::core::voice::audio::{AudioBackend, AudioDevices};
-use crate::core::voice::call::{CallError, CallState, VoiceEvent, VoiceHandle};
+use crate::core::voice::call::{CallError, CallState, PushToTalkSource, VoiceEvent, VoiceHandle};
 use crate::core::voice::settings::VoiceSettings;
+use crate::push_to_talk::PushToTalkStatus;
 
 pub struct AppState {
     pub attention: std::sync::Arc<crate::attention::Attention>,
@@ -22,6 +23,7 @@ pub struct AppState {
     pub audio: Arc<dyn AudioBackend>,
     pub settings_path: PathBuf,
     pub voice_settings_path: PathBuf,
+    pub push_to_talk: Arc<crate::push_to_talk::PushToTalk>,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +178,7 @@ pub fn get_voice_settings(state: State<'_, AppState>) -> VoiceSettings {
 #[tauri::command(rename_all = "snake_case")]
 pub async fn set_voice_settings(
     state: State<'_, AppState>,
+    app: AppHandle,
     settings: VoiceSettings,
 ) -> Result<VoiceSettings, CommandError> {
     let settings = settings.normalized();
@@ -183,7 +186,21 @@ pub async fn set_voice_settings(
         .save(&state.voice_settings_path)
         .map_err(|err| CommandError::new("io", err.to_string()))?;
     state.voice.set_settings(settings.clone()).await?;
+    state.push_to_talk.apply(&app, &settings);
     Ok(settings)
+}
+
+/// The push-to-talk key as seen by the focused window.
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_push_to_talk(state: State<'_, AppState>, pressed: bool) {
+    state
+        .voice
+        .set_push_to_talk(PushToTalkSource::Window, pressed);
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn push_to_talk_status(state: State<'_, AppState>) -> PushToTalkStatus {
+    state.push_to_talk.status()
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -222,6 +239,12 @@ pub fn emit_voice(app: &AppHandle, event: VoiceEvent) {
 #[tauri::command(rename_all = "snake_case")]
 pub fn set_window_focused(state: State<'_, AppState>, app: AppHandle, focused: bool) {
     state.attention.set_focused(&app, focused);
+    if !focused {
+        // A key released outside the window never reaches it.
+        state
+            .voice
+            .set_push_to_talk(PushToTalkSource::Window, false);
+    }
 }
 
 #[tauri::command(rename_all = "snake_case")]
