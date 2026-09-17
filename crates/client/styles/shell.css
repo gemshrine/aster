@@ -141,6 +141,18 @@
   border-top: 1px solid var(--border);
 }
 
+.self-panel__live {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--bg-panel-2);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.self-panel__live--on {
+  background: var(--sage);
+}
+
 .self-panel__name {
   flex: 1;
   min-width: 0;
@@ -195,4 +207,124 @@
   background: var(--bg-panel-2);
   color: var(--text-tertiary);
   cursor: default;
+}
+
+/* voice settings */
+
+.vset {
+  max-width: 520px;
+}
+
+.vset__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 34px;
+  margin-top: 6px;
+}
+
+.vset__label {
+  color: var(--text-secondary);
+}
+
+.vset__control {
+  width: 260px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.vset__checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.vset__key {
+  text-align: left;
+  cursor: pointer;
+}
+
+.vset__meter-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.vset__meter {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.vset__meter-fill {
+  height: 100%;
+  border-radius: var(--r-sm);
+  background: var(--text-tertiary);
+  transition: width 80ms linear;
+}
+
+.vset__meter-fill--live {
+  background: var(--sage);
+}
+
+.vset__meter-mark {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--accent);
+}
+
+.vset__hint {
+  margin-top: 10px;
+}
+
+.vset__code {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--bg-panel-2);
+  color: var(--text-secondary);
+  overflow-x: auto;
+}
+
+.vset__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+/* settings tabs */
+
+.settings__tabs {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  max-width: 520px;
+  margin: 40px auto -24px;
+}
+
+.settings__tab {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings__tab--active {
+  background: var(--accent-soft);
+  color: var(--accent);
 }

@@ -37,7 +37,8 @@ impl IconButtonKind {
 pub fn IconButton(
     icon: Icon,
     /// Accessible name — every icon button is unlabelled visually.
-    label: &'static str,
+    #[prop(into)]
+    label: Signal<&'static str>,
     /// Takes a plain kind or a signal, so a toggle can flip it live.
     #[prop(optional, into)]
     kind: Signal<IconButtonKind>,
@@ -50,8 +51,8 @@ pub fn IconButton(
             type="button"
             class=move || kind.get().class()
             style=move || format!("--btn-size:{}px", sizes.get().0)
-            aria-label=label
-            title=label
+            aria-label=move || label.get()
+            title=move || label.get()
             disabled=move || disabled.get()
             on:click=move |_| {
                 if disabled.get() {

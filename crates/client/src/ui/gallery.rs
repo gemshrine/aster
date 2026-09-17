@@ -342,6 +342,10 @@ fn ShellCase() -> impl IntoView {
                         on_settings=Callback::new(|()| ())
                         in_call=false
                         on_call=Callback::new(|()| ())
+                        muted=false
+                        transmitting=true
+                        on_mute=Callback::new(|()| ())
+                        on_voice_settings=Callback::new(|()| ())
                     >
                         <div style="padding:26px 22px;">
                             <p class="t-ui" style="color:var(--text-secondary);">

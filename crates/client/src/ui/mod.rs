@@ -10,3 +10,4 @@ pub mod icons;
 pub mod settings;
 pub mod shell;
 pub mod text_field;
+pub mod voice_settings;
