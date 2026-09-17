@@ -536,16 +536,23 @@ async fn missing_device_falls_back_without_ending_the_call() {
 /// Bob's speaker leaks alice's 440 Hz back into his microphone. How much of
 /// it comes back to alice's speaker, relative to bob's own 1000 Hz tone.
 ///
-/// Noise suppression and gain stay off at bob: both adapt to a steady tone
-/// over time, which would make the echo level depend on machine speed.
+/// Only bob processes audio. Noise suppression and gain adapt to a steady
+/// tone over time, which would make the result depend on machine speed. And
+/// with AEC at alice too, the 440 Hz coming back in her render reference
+/// lets her echo suppressor mute her own 440 Hz microphone, so whoever
+/// starts first decides whether any echo exists at all.
 async fn echo_returned(echo_cancellation: bool) -> f32 {
     let addr = spawn_server(QueueLimits::default()).await;
-    let alice = Peer::online(addr, ALICE, 440.0, test_config()).await;
-    let settings = VoiceSettings {
-        echo_cancellation,
+    let unprocessed = VoiceSettings {
+        echo_cancellation: false,
         noise_suppression: NoiseSuppression::Off,
         auto_gain: false,
         ..VoiceSettings::default()
+    };
+    let alice = Peer::with_audio(addr, ALICE, 440.0, test_config(), 0.0, unprocessed.clone()).await;
+    let settings = VoiceSettings {
+        echo_cancellation,
+        ..unprocessed
     };
     let bob = Peer::with_audio(addr, BOB, 1000.0, test_config(), 0.8, settings).await;
     tokio::time::timeout(WAIT, async {
