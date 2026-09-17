@@ -35,8 +35,8 @@ pub struct Attention {
 impl Attention {
     /// Builds the tray icon and its menu.
     pub fn install(app: &AppHandle) -> tauri::Result<Self> {
-        let open = MenuItem::with_id(app, "open", "Открыть", true, None::<&str>)?;
-        let quit = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
+        let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
         let menu = Menu::with_items(app, &[&open, &quit])?;
 
         // `default_window_icon` borrows from the app; own the pixels so the
@@ -96,7 +96,7 @@ impl Attention {
         }
         let count = self.unread.fetch_add(1, Ordering::Relaxed) + 1;
         self.publish(app, count);
-        notify(app, "Кент", &shorten(&message.body));
+        notify(app, "Kent", &shorten(&message.body));
     }
 
     /// An incoming call always notifies, focused or not: it is the one thing
