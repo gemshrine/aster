@@ -13,11 +13,11 @@ use client_tauri_lib::core::voice::audio::{
 };
 use client_tauri_lib::core::voice::call::AudioDirection;
 use client_tauri_lib::core::voice::call::{
-    voice, CallConfig, CallError, CallState, EndReason, VoiceEvent, VoiceHandle,
+    voice, CallConfig, CallError, CallState, EndReason, PushToTalkSource, VoiceEvent, VoiceHandle,
 };
 use client_tauri_lib::core::voice::media::signal::{tone_ratio, Sine};
 use client_tauri_lib::core::voice::media::{level_dbfs, FRAME};
-use client_tauri_lib::core::voice::settings::{NoiseSuppression, VoiceSettings};
+use client_tauri_lib::core::voice::settings::{InputMode, NoiseSuppression, VoiceSettings};
 use common::{fast_timing, spawn_server, ALICE, BOB, WAIT};
 use signaling_server::hub::QueueLimits;
 use tokio::sync::mpsc;
@@ -618,6 +618,70 @@ async fn input_monitor_reports_levels_outside_a_call() {
             .any(|e| matches!(e, VoiceEvent::InputLevel { .. })),
         "levels keep coming after the monitor is off"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn push_to_talk_sends_only_while_the_key_is_held() {
+    let addr = spawn_server(QueueLimits::default()).await;
+    // Gain control would slowly turn the steady test tone down while the key
+    // is up; this test is about the gate, not the processing.
+    let settings = VoiceSettings {
+        input_mode: InputMode::PushToTalk,
+        ptt_release_delay_ms: 1000,
+        echo_cancellation: false,
+        noise_suppression: NoiseSuppression::Off,
+        auto_gain: false,
+        ..VoiceSettings::default()
+    };
+    let alice = Peer::with_audio(addr, ALICE, 440.0, test_config(), 0.0, settings).await;
+    let bob = Peer::online(addr, BOB, 1000.0, test_config()).await;
+    tokio::time::timeout(WAIT, async {
+        while !matches!(
+            alice.signaling.state(),
+            ConnectionState::Connected {
+                peer_online: true,
+                ..
+            }
+        ) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("peer did not come online");
+    let (mut alice, bob) = connect(alice, bob).await;
+
+    // Not pressed: bob hears nothing although alice's microphone is loud.
+    alice.wait_for_tone(1000.0, 400).await;
+    let at_bob = bob.played_tail(400);
+    assert!(level_dbfs(&at_bob) < -45.0, "{} dBFS", level_dbfs(&at_bob));
+
+    alice.voice.set_push_to_talk(PushToTalkSource::Window, true);
+    alice
+        .wait(|e| matches!(e, VoiceEvent::Audio(a) if a.transmitting))
+        .await;
+    bob.wait_for_tone(440.0, 400).await;
+
+    // Released: the tail keeps going for the delay, then silence.
+    alice
+        .voice
+        .set_push_to_talk(PushToTalkSource::Window, false);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let tail = bob.played_tail(200);
+    assert!(
+        level_dbfs(&tail) > -20.0,
+        "tail cut: {} dBFS",
+        level_dbfs(&tail)
+    );
+    alice
+        .wait(|e| matches!(e, VoiceEvent::Audio(a) if !a.transmitting))
+        .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let after = bob.played_tail(200);
+    assert!(level_dbfs(&after) < -45.0, "{} dBFS", level_dbfs(&after));
+
+    // A global press counts the same as the window.
+    alice.voice.set_push_to_talk(PushToTalkSource::Global, true);
+    bob.wait_for_tone(440.0, 400).await;
 }
 
 #[test]

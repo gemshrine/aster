@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 pub const VAD_THRESHOLD_RANGE: std::ops::RangeInclusive<i32> = -70..=-20;
+pub const PTT_RELEASE_DELAY_MAX_MS: u32 = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -17,6 +18,20 @@ pub struct VoiceSettings {
     pub noise_suppression: NoiseSuppression,
     pub auto_gain: bool,
     pub vad_threshold_dbfs: i32,
+    pub input_mode: InputMode,
+    /// Keeps sending after the key is released so the last word is not cut.
+    pub ptt_release_delay_ms: u32,
+    /// Global push-to-talk accelerator (`"F13"`, `"Alt+Space"`) where no
+    /// portal exists; `None` means no global key.
+    pub ptt_shortcut: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMode {
+    #[default]
+    VoiceActivity,
+    PushToTalk,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +54,9 @@ impl Default for VoiceSettings {
             noise_suppression: NoiseSuppression::Standard,
             auto_gain: true,
             vad_threshold_dbfs: -45,
+            input_mode: InputMode::VoiceActivity,
+            ptt_release_delay_ms: 200,
+            ptt_shortcut: None,
         }
     }
 }
@@ -73,7 +91,11 @@ impl VoiceSettings {
     }
 
     pub fn normalized(mut self) -> Self {
-        for device in [&mut self.input_device, &mut self.output_device] {
+        for device in [
+            &mut self.input_device,
+            &mut self.output_device,
+            &mut self.ptt_shortcut,
+        ] {
             if device.as_deref().is_some_and(|id| id.trim().is_empty()) {
                 *device = None;
             }
@@ -81,6 +103,7 @@ impl VoiceSettings {
         self.vad_threshold_dbfs = self
             .vad_threshold_dbfs
             .clamp(*VAD_THRESHOLD_RANGE.start(), *VAD_THRESHOLD_RANGE.end());
+        self.ptt_release_delay_ms = self.ptt_release_delay_ms.min(PTT_RELEASE_DELAY_MAX_MS);
         self
     }
 }
@@ -121,11 +144,15 @@ mod tests {
             output_device: Some("pulse:headphones".into()),
             noise_suppression: NoiseSuppression::Strong,
             vad_threshold_dbfs: -90,
+            ptt_release_delay_ms: 5000,
+            ptt_shortcut: Some(String::new()),
             ..VoiceSettings::default()
         }
         .normalized();
         assert_eq!(settings.input_device, None);
+        assert_eq!(settings.ptt_shortcut, None);
         assert_eq!(settings.vad_threshold_dbfs, -70);
+        assert_eq!(settings.ptt_release_delay_ms, 1000);
 
         settings.save(&path).unwrap();
         assert_eq!(VoiceSettings::load(&path), settings);
@@ -143,6 +170,9 @@ mod tests {
                 "noise_suppression": "standard",
                 "auto_gain": true,
                 "vad_threshold_dbfs": -45,
+                "input_mode": "voice_activity",
+                "ptt_release_delay_ms": 200,
+                "ptt_shortcut": null,
             })
         );
     }

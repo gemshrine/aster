@@ -1,6 +1,7 @@
 mod attention;
 mod commands;
 pub mod core;
+mod push_to_talk;
 
 use std::sync::Arc;
 
@@ -33,14 +34,26 @@ pub fn run() {
 
             let (voice_tx, mut voice_events) = mpsc::unbounded_channel();
             let audio = audio_backend();
+            let voice_settings = VoiceSettings::load(&voice_settings_path);
             let (voice, voice_actor) = voice(
                 signaling.clone(),
                 audio.clone(),
                 voice_tx,
                 CallConfig::default(),
-                VoiceSettings::load(&voice_settings_path),
+                voice_settings.clone(),
             );
             tauri::async_runtime::spawn(voice_actor);
+
+            if !push_to_talk::is_wayland() {
+                // Its X11 key grab fails without a display; PTT then reports
+                // `unavailable` rather than the app failing to start.
+                let plugin = tauri_plugin_global_shortcut::Builder::new().build();
+                if let Err(err) = app.handle().plugin(plugin) {
+                    eprintln!("global shortcuts unavailable: {err}");
+                }
+            }
+            let push_to_talk = push_to_talk::PushToTalk::new(voice.clone());
+            push_to_talk.apply(app.handle(), &voice_settings);
 
             let (upserts_tx, mut upserts) = mpsc::unbounded_channel();
             let chat = Arc::new(Chat::new(history, signaling.clone(), upserts_tx));
@@ -94,6 +107,7 @@ pub fn run() {
                 settings_path,
                 attention,
                 voice_settings_path,
+                push_to_talk,
             });
             Ok(())
         })
@@ -118,6 +132,8 @@ pub fn run() {
             commands::get_voice_settings,
             commands::set_voice_settings,
             commands::set_input_monitor,
+            commands::set_push_to_talk,
+            commands::push_to_talk_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aster client");

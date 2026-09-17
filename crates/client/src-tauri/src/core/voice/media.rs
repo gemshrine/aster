@@ -125,6 +125,55 @@ impl Vad {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GateInput {
+    pub push_to_talk: bool,
+    /// The push-to-talk key is held in any source.
+    pub pressed: bool,
+    pub release_delay_ms: u32,
+    pub vad_threshold_dbfs: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GateState {
+    pub speaking: bool,
+    /// Whether this frame is sent rather than replaced by silence.
+    pub open: bool,
+}
+
+/// Decides per frame whether the microphone is sent: by voice activity, or
+/// by the push-to-talk key plus a hold after release.
+#[derive(Default)]
+pub struct Gate {
+    vad: Vad,
+    hold_frames: u32,
+}
+
+impl Gate {
+    pub fn update(&mut self, frame: &Frame, input: GateInput) -> GateState {
+        self.vad.set_threshold(input.vad_threshold_dbfs);
+        let speaking = self.vad.update(frame);
+        if !input.push_to_talk {
+            self.hold_frames = 0;
+            return GateState {
+                speaking,
+                open: speaking,
+            };
+        }
+        let open = if input.pressed {
+            let frame_ms = (FRAME * 1000) as u32 / SAMPLE_RATE;
+            self.hold_frames = input.release_delay_ms.div_ceil(frame_ms);
+            true
+        } else if self.hold_frames > 0 {
+            self.hold_frames -= 1;
+            true
+        } else {
+            false
+        };
+        GateState { speaking, open }
+    }
+}
+
 pub struct Encoder {
     opus: OpusEncoder,
     packet: Vec<u8>,
@@ -402,6 +451,45 @@ mod tests {
             !sensitive.update(&speech.next_frame()),
             "-23 dBFS is below -20"
         );
+    }
+
+    #[test]
+    fn gate_follows_voice_activity_or_the_key() {
+        let mut gate = Gate::default();
+        let speech = Sine::new(300.0, 0.1).next_frame();
+        let vad = GateInput {
+            vad_threshold_dbfs: -45.0,
+            ..GateInput::default()
+        };
+        assert!(gate.update(&speech, vad).open);
+
+        let mut gate = Gate::default();
+        let ptt = GateInput {
+            push_to_talk: true,
+            release_delay_ms: 50,
+            ..vad
+        };
+        let released = gate.update(&speech, ptt);
+        assert_eq!(
+            released,
+            GateState {
+                speaking: true,
+                open: false
+            }
+        );
+        let pressed = GateInput {
+            pressed: true,
+            ..ptt
+        };
+        assert!(
+            gate.update(&SILENCE, pressed).open,
+            "quiet speech still goes"
+        );
+        // 50 ms rounds up to three 20 ms frames after release.
+        for _ in 0..3 {
+            assert!(gate.update(&SILENCE, ptt).open);
+        }
+        assert!(!gate.update(&SILENCE, ptt).open);
     }
 
     #[test]
