@@ -5,12 +5,42 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub const VAD_THRESHOLD_RANGE: std::ops::RangeInclusive<i32> = -70..=-20;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VoiceSettings {
     /// Device id from `list_audio_devices`; `None` is the system default.
     pub input_device: Option<String>,
     pub output_device: Option<String>,
+    pub echo_cancellation: bool,
+    pub noise_suppression: NoiseSuppression,
+    pub auto_gain: bool,
+    pub vad_threshold_dbfs: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoiseSuppression {
+    Off,
+    /// WebRTC NS inside the aec3 pipeline.
+    #[default]
+    Standard,
+    /// RNNoise instead of WebRTC NS: stronger on keyboard noise.
+    Strong,
+}
+
+impl Default for VoiceSettings {
+    fn default() -> Self {
+        Self {
+            input_device: None,
+            output_device: None,
+            echo_cancellation: true,
+            noise_suppression: NoiseSuppression::Standard,
+            auto_gain: true,
+            vad_threshold_dbfs: -45,
+        }
+    }
 }
 
 impl VoiceSettings {
@@ -48,6 +78,9 @@ impl VoiceSettings {
                 *device = None;
             }
         }
+        self.vad_threshold_dbfs = self
+            .vad_threshold_dbfs
+            .clamp(*VAD_THRESHOLD_RANGE.start(), *VAD_THRESHOLD_RANGE.end());
         self
     }
 }
@@ -73,8 +106,8 @@ mod tests {
         assert_eq!(
             VoiceSettings::load(&path),
             VoiceSettings {
-                input_device: None,
                 output_device: Some("alsa:hw:1".into()),
+                ..VoiceSettings::default()
             }
         );
     }
@@ -86,11 +119,31 @@ mod tests {
         let settings = VoiceSettings {
             input_device: Some("  ".into()),
             output_device: Some("pulse:headphones".into()),
+            noise_suppression: NoiseSuppression::Strong,
+            vad_threshold_dbfs: -90,
+            ..VoiceSettings::default()
         }
         .normalized();
         assert_eq!(settings.input_device, None);
+        assert_eq!(settings.vad_threshold_dbfs, -70);
 
         settings.save(&path).unwrap();
         assert_eq!(VoiceSettings::load(&path), settings);
+    }
+
+    #[test]
+    fn json_matches_spec() {
+        let json = serde_json::to_value(VoiceSettings::default()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "input_device": null,
+                "output_device": null,
+                "echo_cancellation": true,
+                "noise_suppression": "standard",
+                "auto_gain": true,
+                "vad_threshold_dbfs": -45,
+            })
+        );
     }
 }

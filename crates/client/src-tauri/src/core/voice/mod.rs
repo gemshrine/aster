@@ -3,4 +3,5 @@
 pub mod audio;
 pub mod call;
 pub mod media;
+pub mod processing;
 pub mod settings;

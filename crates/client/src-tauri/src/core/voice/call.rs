@@ -1,7 +1,7 @@
 //! Call state machine and WebRTC session, see `specs/0011-voice-core.md`.
 
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,7 +29,8 @@ use webrtc::peer_connection::{
 use webrtc::rtp_transceiver::RtpSender;
 
 use super::audio::{AudioBackend, AudioStream};
-use super::media::{Encoder, Frame, JitterBuffer, Vad, FRAME, SILENCE};
+use super::media::{Encoder, Frame, JitterBuffer, LevelMeter, Vad, FRAME, SILENCE};
+use super::processing::{Dsp, DspInput, ProcessingConfig};
 use super::settings::VoiceSettings;
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 
@@ -79,6 +80,10 @@ pub enum VoiceEvent {
         direction: AudioDirection,
         message: String,
     },
+    /// Microphone level after processing, while the input monitor is on.
+    InputLevel {
+        dbfs: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -119,6 +124,7 @@ enum Command {
     HangUp,
     SetMuted(bool),
     UpdateSettings(VoiceSettings),
+    SetInputMonitor(bool),
 }
 
 enum Input {
@@ -166,6 +172,12 @@ impl VoiceHandle {
     /// Applies immediately, including to a call in progress.
     pub async fn set_settings(&self, settings: VoiceSettings) -> Result<(), CallError> {
         self.command(Command::UpdateSettings(settings)).await
+    }
+
+    /// Reports `InputLevel` 10 times a second; outside a call this opens the
+    /// microphone with the same processing but sends nothing.
+    pub async fn set_input_monitor(&self, enabled: bool) -> Result<(), CallError> {
+        self.command(Command::SetInputMonitor(enabled)).await
     }
 
     /// Feeds signaling events to the call; call in event order.
@@ -223,6 +235,8 @@ pub fn voice(
         generation: 0,
         muted: false,
         audio: AudioStatus::default(),
+        monitor: Arc::new(AtomicBool::new(false)),
+        idle_monitor: None,
     };
     (handle, actor.run())
 }
@@ -232,6 +246,7 @@ struct Flags {
     muted: AtomicBool,
     local_speaking: AtomicBool,
     remote_speaking: AtomicBool,
+    vad_threshold_dbfs: AtomicI32,
 }
 
 struct Session {
@@ -248,11 +263,17 @@ struct Session {
     media: Option<Media>,
 }
 
+/// A microphone stream and the processing it feeds.
+struct Capture {
+    /// Declared first: the stream stops before its DSP thread loses input.
+    stream: Option<Box<dyn AudioStream>>,
+    /// Kept so a new stream can feed the running processing.
+    dsp: Dsp,
+}
+
 struct Media {
-    capture: Option<Box<dyn AudioStream>>,
+    capture: Capture,
     playback: Option<Box<dyn AudioStream>>,
-    /// Kept so a new capture stream can feed the running encoder.
-    frames: mpsc::Sender<Frame>,
     encoder: JoinHandle<()>,
 }
 
@@ -351,6 +372,10 @@ struct Actor {
     generation: u64,
     muted: bool,
     audio: AudioStatus,
+    /// Shared with every DSP thread: whether to report `InputLevel`.
+    monitor: Arc<AtomicBool>,
+    /// The monitor's own microphone while no call has media.
+    idle_monitor: Option<Capture>,
 }
 
 impl Actor {
@@ -427,6 +452,11 @@ impl Actor {
             }
             Command::UpdateSettings(settings) => {
                 self.apply_settings(settings);
+                Ok(())
+            }
+            Command::SetInputMonitor(enabled) => {
+                self.monitor.store(enabled, Ordering::Relaxed);
+                self.sync_monitor();
                 Ok(())
             }
             Command::SetMuted(muted) => {
@@ -789,6 +819,9 @@ impl Actor {
 
         let flags = Arc::new(Flags::default());
         flags.muted.store(self.muted, Ordering::Relaxed);
+        flags
+            .vad_threshold_dbfs
+            .store(self.settings.vad_threshold_dbfs, Ordering::Relaxed);
         Ok(Session {
             generation,
             pc,
@@ -813,11 +846,14 @@ impl Actor {
             .and_then(|params| params.rtp_parameters.codecs.first().map(|c| c.payload_type));
         let ssrc = session.track.ssrcs().await.first().copied();
 
+        // The call takes over the microphone; its DSP reports levels too.
+        self.idle_monitor = None;
         let (frames_tx, mut frames_rx) = mpsc::channel::<Frame>(25);
+        let dsp = self.spawn_dsp(Some(frames_tx));
         let capture = open_capture(
             &*self.backend,
             self.settings.input_device.as_deref(),
-            frames_tx.clone(),
+            dsp.sender(),
             &self.events,
         );
 
@@ -830,6 +866,7 @@ impl Actor {
             let mut encoder = Encoder::new();
             let mut vad = Vad::default();
             while let Some(frame) = frames_rx.recv().await {
+                vad.set_threshold(flags.vad_threshold_dbfs.load(Ordering::Relaxed) as f32);
                 let speaking = vad.update(&frame);
                 let muted = flags.muted.load(Ordering::Relaxed);
                 flags
@@ -853,44 +890,106 @@ impl Actor {
             self.settings.output_device.as_deref(),
             session.jitter.clone(),
             session.flags.clone(),
+            dsp.sender(),
             &self.events,
         );
 
         session.media = Some(Media {
-            capture,
+            capture: Capture {
+                stream: capture,
+                dsp,
+            },
             playback,
-            frames: frames_tx,
             encoder,
         });
     }
 
-    fn apply_settings(&mut self, settings: VoiceSettings) {
-        let previous = std::mem::replace(&mut self.settings, settings);
-        let Phase::Connected { session, .. } = &mut self.phase else {
-            return;
-        };
-        let Some(media) = session.media.as_mut() else {
-            return;
-        };
-        if previous.input_device != self.settings.input_device {
-            // Release the old device before opening the new one.
-            media.capture = None;
-            media.capture = open_capture(
+    /// Processing for one microphone. Processed frames go to `frames` when a
+    /// call is sending, and to `InputLevel` while the monitor is on.
+    fn spawn_dsp(&self, frames: Option<mpsc::Sender<Frame>>) -> Dsp {
+        let monitor = self.monitor.clone();
+        let events = self.events.clone();
+        let mut meter = LevelMeter::default();
+        Dsp::spawn(ProcessingConfig::from(&self.settings), move |frame| {
+            if let Some(frames) = &frames {
+                let _ = frames.try_send(*frame);
+            }
+            if let Some(dbfs) = meter.push(frame) {
+                if monitor.load(Ordering::Relaxed) {
+                    let _ = events.send(VoiceEvent::InputLevel { dbfs });
+                }
+            }
+        })
+    }
+
+    /// Opens or closes the monitor's own microphone: it runs only while the
+    /// monitor is on and no call has media.
+    fn sync_monitor(&mut self) {
+        let in_call = matches!(
+            &self.phase,
+            Phase::Connected { session, .. } if session.media.is_some()
+        );
+        if !self.monitor.load(Ordering::Relaxed) || in_call {
+            self.idle_monitor = None;
+        } else if self.idle_monitor.is_none() {
+            let dsp = self.spawn_dsp(None);
+            let stream = open_capture(
                 &*self.backend,
                 self.settings.input_device.as_deref(),
-                media.frames.clone(),
+                dsp.sender(),
                 &self.events,
             );
+            self.idle_monitor = Some(Capture { stream, dsp });
         }
+    }
+
+    fn apply_settings(&mut self, settings: VoiceSettings) {
+        let previous = std::mem::replace(&mut self.settings, settings);
+        if let Some(session) = self.phase.session_mut() {
+            session
+                .flags
+                .vad_threshold_dbfs
+                .store(self.settings.vad_threshold_dbfs, Ordering::Relaxed);
+        }
+
+        let processing = ProcessingConfig::from(&self.settings);
+        let capture = match &mut self.phase {
+            Phase::Connected { session, .. } => {
+                session.media.as_mut().map(|media| &mut media.capture)
+            }
+            _ => None,
+        }
+        .or(self.idle_monitor.as_mut());
+        if let Some(capture) = capture {
+            if ProcessingConfig::from(&previous) != processing {
+                capture.dsp.configure(processing);
+            }
+            if previous.input_device != self.settings.input_device {
+                // Release the old device before opening the new one.
+                capture.stream = None;
+                capture.stream = open_capture(
+                    &*self.backend,
+                    self.settings.input_device.as_deref(),
+                    capture.dsp.sender(),
+                    &self.events,
+                );
+            }
+        }
+
         if previous.output_device != self.settings.output_device {
-            media.playback = None;
-            media.playback = open_playback(
-                &*self.backend,
-                self.settings.output_device.as_deref(),
-                session.jitter.clone(),
-                session.flags.clone(),
-                &self.events,
-            );
+            if let Phase::Connected { session, .. } = &mut self.phase {
+                if let Some(media) = session.media.as_mut() {
+                    media.playback = None;
+                    media.playback = open_playback(
+                        &*self.backend,
+                        self.settings.output_device.as_deref(),
+                        session.jitter.clone(),
+                        session.flags.clone(),
+                        media.capture.dsp.sender(),
+                        &self.events,
+                    );
+                }
+            }
         }
     }
 
@@ -920,6 +1019,7 @@ impl Actor {
         self.teardown();
         self.muted = false;
         self.refresh_audio();
+        self.sync_monitor();
         self.set_state(CallState::Ended { reason });
         self.set_state(CallState::Idle);
     }
@@ -946,12 +1046,12 @@ impl Actor {
 fn open_capture(
     backend: &dyn AudioBackend,
     device: Option<&str>,
-    frames: mpsc::Sender<Frame>,
+    dsp: std::sync::mpsc::SyncSender<DspInput>,
     events: &mpsc::UnboundedSender<VoiceEvent>,
 ) -> Option<Box<dyn AudioStream>> {
     let sink = Box::new(move |frame: &Frame| {
         // Dropping a frame beats blocking the audio thread.
-        let _ = frames.try_send(*frame);
+        let _ = dsp.try_send(DspInput::Capture(*frame));
     });
     opened(
         backend.capture(device, sink),
@@ -965,11 +1065,14 @@ fn open_playback(
     device: Option<&str>,
     jitter: Arc<Mutex<JitterBuffer>>,
     flags: Arc<Flags>,
+    render: std::sync::mpsc::SyncSender<DspInput>,
     events: &mpsc::UnboundedSender<VoiceEvent>,
 ) -> Option<Box<dyn AudioStream>> {
     let mut vad = Vad::default();
     let source = Box::new(move || {
         let frame = jitter.lock().unwrap().pop();
+        // What reaches the speaker is the echo reference.
+        let _ = render.try_send(DspInput::Render(frame));
         flags
             .remote_speaking
             .store(vad.update(&frame), Ordering::Relaxed);

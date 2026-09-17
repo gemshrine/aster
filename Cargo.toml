@@ -10,3 +10,10 @@ exclude = ["crates/client"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+
+# Voice DSP must keep up with real time in debug builds too (specs/0013).
+[profile.dev.package.aec3]
+opt-level = 3
+
+[profile.dev.package.nnnoiseless]
+opt-level = 3

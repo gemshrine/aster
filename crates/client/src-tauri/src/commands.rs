@@ -186,10 +186,23 @@ pub async fn set_voice_settings(
     Ok(settings)
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_input_monitor(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), CommandError> {
+    Ok(state.voice.set_input_monitor(enabled).await?)
+}
+
 #[derive(Clone, Serialize)]
 struct AudioError {
     direction: crate::core::voice::call::AudioDirection,
     message: String,
+}
+
+#[derive(Clone, Serialize)]
+struct InputLevel {
+    dbfs: f32,
 }
 
 pub fn emit_voice(app: &AppHandle, event: VoiceEvent) {
@@ -199,6 +212,7 @@ pub fn emit_voice(app: &AppHandle, event: VoiceEvent) {
         VoiceEvent::AudioError { direction, message } => {
             app.emit("call-audio-error", AudioError { direction, message })
         }
+        VoiceEvent::InputLevel { dbfs } => app.emit("input-level", InputLevel { dbfs }),
     };
     if let Err(err) = result {
         eprintln!("failed to emit event: {err}");

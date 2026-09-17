@@ -59,16 +59,61 @@ pub fn level_dbfs(frame: &[f32]) -> f32 {
     (10.0 * mean_square.log10()).max(-100.0)
 }
 
-/// Energy-based voice activity with hangover.
+/// Frames per `input-level` report: 10 per second.
+const LEVEL_FRAMES: u32 = 5;
+
+/// Averages frame energy into periodic level reports.
 #[derive(Default)]
+pub struct LevelMeter {
+    sum_squares: f32,
+    frames: u32,
+}
+
+impl LevelMeter {
+    /// Returns the level of the last 100 ms once enough frames arrived.
+    pub fn push(&mut self, frame: &Frame) -> Option<f32> {
+        self.sum_squares += frame.iter().map(|s| s * s).sum::<f32>();
+        self.frames += 1;
+        if self.frames < LEVEL_FRAMES {
+            return None;
+        }
+        let mean_square = self.sum_squares / (LEVEL_FRAMES as usize * FRAME) as f32;
+        *self = Self::default();
+        Some(if mean_square <= 1e-10 {
+            -100.0
+        } else {
+            (10.0 * mean_square.log10()).max(-100.0)
+        })
+    }
+}
+
+/// Energy-based voice activity with hangover.
 pub struct Vad {
+    threshold_dbfs: f32,
     hangover: u32,
 }
 
+impl Default for Vad {
+    fn default() -> Self {
+        Self::new(VAD_THRESHOLD_DBFS)
+    }
+}
+
 impl Vad {
+    pub fn new(threshold_dbfs: f32) -> Self {
+        Self {
+            threshold_dbfs,
+            hangover: 0,
+        }
+    }
+
+    pub fn set_threshold(&mut self, dbfs: f32) {
+        self.threshold_dbfs = dbfs;
+    }
+
     /// Feeds one frame and returns whether someone is speaking.
     pub fn update(&mut self, frame: &Frame) -> bool {
-        if level_dbfs(frame) > VAD_THRESHOLD_DBFS {
+        if level_dbfs(frame) > self.threshold_dbfs {
             self.hangover = VAD_HANGOVER_FRAMES;
             return true;
         }
@@ -319,6 +364,21 @@ mod tests {
     }
 
     #[test]
+    fn level_meter_reports_every_100ms() {
+        let mut meter = LevelMeter::default();
+        let mut sine = Sine::new(440.0, 1.0);
+        for _ in 0..LEVEL_FRAMES - 1 {
+            assert_eq!(meter.push(&sine.next_frame()), None);
+        }
+        let level = meter.push(&sine.next_frame()).unwrap();
+        assert!((level + 3.0).abs() < 0.5, "{level}");
+        for _ in 0..LEVEL_FRAMES - 1 {
+            assert_eq!(meter.push(&SILENCE), None);
+        }
+        assert_eq!(meter.push(&SILENCE), Some(-100.0));
+    }
+
+    #[test]
     fn vad_holds_speech_for_hangover() {
         let mut vad = Vad::default();
         let mut speech = Sine::new(300.0, 0.1);
@@ -331,6 +391,17 @@ mod tests {
 
         let whisper = Sine::new(300.0, 0.001).next_frame();
         assert!(!vad.update(&whisper), "{} dBFS", level_dbfs(&whisper));
+
+        let mut sensitive = Vad::new(-70.0);
+        assert!(sensitive.update(&whisper));
+        sensitive.set_threshold(-20.0);
+        for _ in 0..=VAD_HANGOVER_FRAMES {
+            sensitive.update(&SILENCE);
+        }
+        assert!(
+            !sensitive.update(&speech.next_frame()),
+            "-23 dBFS is below -20"
+        );
     }
 
     #[test]
