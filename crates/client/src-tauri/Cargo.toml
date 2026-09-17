@@ -50,3 +50,8 @@ tokio = { version = "1.53.1", features = ["full", "test-util"] }
 default = ["audio-device"]
 # Real sound through cpal; needs ALSA headers on Linux (specs/0011).
 audio-device = ["dep:cpal"]
+# Serves the frontend from the binary instead of the dev server. Tauri reads
+# this as "not a dev build" (`dev = !custom-protocol` in its build script), so
+# a release build without it shows an empty window unless `trunk serve` runs.
+# `cargo tauri build` passes it; a plain cargo build has to ask for it.
+custom-protocol = ["tauri/custom-protocol"]

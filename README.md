@@ -28,6 +28,18 @@ cd crates/client && cargo tauri dev
 `~/.config/dev.gemshrine.aster/settings.json`, так что для двух клиентов на
 одной машине нужен разный `XDG_CONFIG_HOME`.
 
+### Рабочая сборка клиента
+
+```bash
+cd crates/client && trunk build --release
+cargo build --release -p client-tauri --features custom-protocol
+# бинарник: target/release/client-tauri
+```
+
+Фича `custom-protocol` обязательна: без неё Tauri считает сборку отладочной и
+грузит фронтенд с `localhost:1420`, то есть окно будет пустым, пока не запущен
+`trunk serve`. `cargo tauri build` добавляет её сам.
+
 Фронтенд без Tauri (для работы над UI) — `cd crates/client && trunk serve`,
 витрина компонентов там же на `#/gallery`.
 
