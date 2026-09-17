@@ -1,3 +1,4 @@
+mod attention;
 mod commands;
 pub mod core;
 
@@ -16,7 +17,10 @@ use crate::core::voice::call::{voice, CallConfig};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .on_window_event(attention::hide_on_close)
         .setup(|app| {
+            let attention = Arc::new(attention::Attention::install(app.handle())?);
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let history = ChatStore::open(&app.path().app_data_dir()?.join("history.sqlite3"))
                 .map_err(|err| err.to_string())?;
@@ -40,8 +44,12 @@ pub fn run() {
             let handle = app.handle().clone();
             let chat_events = chat.clone();
             let voice_events_in = voice.clone();
+            let connection_tray = attention.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = events.recv().await {
+                    if let crate::core::signaling::CoreEvent::State(state) = &event {
+                        connection_tray.set_tooltip(&tray_tooltip(state));
+                    }
                     commands::emit(&handle, event.clone());
                     voice_events_in.core_event(&event);
                     chat_events.handle_event(&event).await;
@@ -49,15 +57,21 @@ pub fn run() {
             });
 
             let handle = app.handle().clone();
+            let message_attention = attention.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(message) = upserts.recv().await {
+                    message_attention.message(&handle, &message);
                     commands::emit_upsert(&handle, message);
                 }
             });
 
             let handle = app.handle().clone();
+            let call_attention = attention.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = voice_events.recv().await {
+                    if let crate::core::voice::call::VoiceEvent::State(state) = &event {
+                        call_attention.call(&handle, state);
+                    }
                     commands::emit_voice(&handle, event);
                 }
             });
@@ -73,6 +87,7 @@ pub fn run() {
                 chat,
                 voice,
                 settings_path,
+                attention,
             });
             Ok(())
         })
@@ -91,9 +106,27 @@ pub fn run() {
             commands::hang_up,
             commands::set_muted,
             commands::call_state,
+            commands::set_window_focused,
+            commands::focus_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aster client");
+}
+
+/// Connection state as the tray tooltip words it.
+fn tray_tooltip(state: &crate::core::signaling::ConnectionState) -> String {
+    use crate::core::signaling::ConnectionState::*;
+    match state {
+        NotConfigured => "Aster — not configured".into(),
+        Connecting { .. } => "Aster — connecting".into(),
+        Connected {
+            peer_online: true, ..
+        } => "Aster — peer online".into(),
+        Connected { .. } => "Aster — connected".into(),
+        Reconnecting { .. } => "Aster — reconnecting".into(),
+        Disconnected => "Aster — disconnected".into(),
+        Failed { .. } => "Aster — connection failed".into(),
+    }
 }
 
 #[cfg(feature = "audio-device")]

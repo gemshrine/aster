@@ -13,6 +13,7 @@ use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 use crate::core::voice::call::{CallError, CallState, VoiceEvent, VoiceHandle};
 
 pub struct AppState {
+    pub attention: std::sync::Arc<crate::attention::Attention>,
     pub signaling: SignalingHandle,
     pub chat: Arc<Chat>,
     pub voice: VoiceHandle,
@@ -171,6 +172,16 @@ pub fn emit_voice(app: &AppHandle, event: VoiceEvent) {
     if let Err(err) = result {
         eprintln!("failed to emit event: {err}");
     }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_window_focused(state: State<'_, AppState>, app: AppHandle, focused: bool) {
+    state.attention.set_focused(&app, focused);
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn focus_window(app: AppHandle) {
+    crate::attention::focus_window(&app);
 }
 
 #[derive(Clone, Serialize)]
