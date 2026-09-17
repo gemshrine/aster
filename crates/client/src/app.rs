@@ -14,11 +14,11 @@ use crate::ui::chat::{Composer, MessageList};
 use crate::ui::settings::{SettingsPanel, SettingsView};
 use crate::ui::shell::Shell;
 
-const PEER_NAME: &str = "Кент";
+const PEER_NAME: &str = "Kent";
 /// Screenfuls of history: the first load, then one page per scroll to the top.
 const FIRST_PAGE: u32 = 200;
 const OLDER_PAGE: u32 = 100;
-const SELF_NAME: &str = "Ты";
+const SELF_NAME: &str = "You";
 
 #[derive(serde::Deserialize)]
 struct PeerStatus {
@@ -68,7 +68,7 @@ impl From<CoreMessage> for Message {
                 CoreStatus::Queued => Status::Queued,
                 CoreStatus::Delivered => Status::Delivered,
                 CoreStatus::Failed => Status::Rejected {
-                    message: "Не доставлено — очередь собеседника переполнена".into(),
+                    message: "Not delivered — peer's queue is full".into(),
                 },
             }),
         }
@@ -201,7 +201,7 @@ pub fn App() -> impl IntoView {
                 Err(err) => {
                     // Keep `has_older` set: the next scroll may well succeed.
                     web_sys::console::error_1(
-                        &format!("история не загрузилась: {}", err.message).into(),
+                        &format!("history failed to load: {}", err.message).into(),
                     );
                 }
             }
@@ -229,9 +229,7 @@ pub fn App() -> impl IntoView {
             let result: Result<CoreMessage, CommandError> =
                 bridge::invoke("send_message", &SendArgs { body }).await;
             if let Err(err) = result {
-                web_sys::console::error_1(
-                    &format!("сообщение не отправлено: {}", err.message).into(),
-                );
+                web_sys::console::error_1(&format!("message not sent: {}", err.message).into());
             }
         });
     });
@@ -290,7 +288,7 @@ pub fn App() -> impl IntoView {
     });
 
     bridge::listen::<CallAudioError>("call-audio-error", move |err| {
-        web_sys::console::error_1(&format!("звук: {}", err.message).into());
+        web_sys::console::error_1(&format!("audio: {}", err.message).into());
     });
 
     /// Fires a call command and reports a refusal to the console; the core
@@ -369,7 +367,7 @@ pub fn App() -> impl IntoView {
                                         }}
                                         <Composer
                                             disabled=offline
-                                            placeholder="Сообщение Кенту"
+                                            placeholder="Message Kent"
                                             on_send=on_send
                                         />
                                     </div>

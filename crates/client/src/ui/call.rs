@@ -38,7 +38,7 @@ fn Tile(
             <div class="call-tile__name">
                 <span class="t-body-strong">{label}</span>
                 <Show when=move || muted.get()>
-                    <span class="call-tile__muted" title="Микрофон выключен">
+                    <span class="call-tile__muted" title="Microphone off">
                         <IconView icon=Icon::Mic size=14.0 />
                     </span>
                 </Show>
@@ -65,7 +65,7 @@ fn Controls(
                 class:call-control--off=move || muted.get()
                 type="button"
                 aria-label=move || {
-                    if muted.get() { "Включить микрофон" } else { "Выключить микрофон" }
+                    if muted.get() { "Unmute" } else { "Mute" }
                 }
                 on:click=move |_| on_mute.run(())
             >
@@ -77,7 +77,7 @@ fn Controls(
                 on:click=move |_| on_hang_up.run(())
             >
                 <IconView icon=Icon::Phone size=19.0 />
-                "Завершить"
+                "Leave"
             </button>
         </div>
     }
@@ -136,7 +136,7 @@ pub fn CallPane(
                         on:click=move |_| on_accept.run(())
                     >
                         <IconView icon=Icon::Phone size=19.0 />
-                        "Принять"
+                        "Accept"
                     </button>
                     <button
                         class="call-control call-control--leave t-ui-strong"
@@ -144,7 +144,7 @@ pub fn CallPane(
                         on:click=move |_| on_decline.run(())
                     >
                         <IconView icon=Icon::Close size=19.0 />
-                        "Отклонить"
+                        "Decline"
                     </button>
                 </div>
             </Show>
@@ -161,7 +161,7 @@ pub fn CallOutcome(#[prop(into)] message: String, on_dismiss: Callback<()>) -> i
             <span class="t-ui">{message}</span>
             <IconButton
                 icon=Icon::Close
-                label="Скрыть"
+                label="Dismiss"
                 kind=IconButtonKind::Sm
                 on_click=on_dismiss
             />

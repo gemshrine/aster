@@ -130,10 +130,10 @@ pub fn MessageList(
     view! {
         <div class="msg-list" node_ref=list on:scroll=on_scroll>
             <Show when=move || loading_older.get()>
-                <p class="t-caption msg-list__loading">"Загружаем более раннее…"</p>
+                <p class="t-caption msg-list__loading">"Loading earlier messages…"</p>
             </Show>
             <Show when=move || groups.get().is_empty() && !loading_older.get()>
-                <p class="t-ui msg-list__empty">"Здесь начнётся переписка."</p>
+                <p class="t-ui msg-list__empty">"No messages yet."</p>
             </Show>
             {move || {
                 let peer_name = peer_name.clone();
@@ -184,7 +184,7 @@ pub fn Composer(
 
     view! {
         <div class="composer" class:composer--disabled=move || disabled.get()>
-            <IconButton icon=Icon::Plus label="Вложение" kind=IconButtonKind::Sm disabled=disabled />
+            <IconButton icon=Icon::Plus label="Attachment" kind=IconButtonKind::Sm disabled=disabled />
             <input
                 class="composer__input t-body selectable"
                 type="text"
@@ -199,12 +199,12 @@ pub fn Composer(
                     }
                 }
             />
-            <IconButton icon=Icon::Emoji label="Эмодзи" kind=IconButtonKind::Sm disabled=disabled />
+            <IconButton icon=Icon::Emoji label="Emoji" kind=IconButtonKind::Sm disabled=disabled />
             <button
                 class="composer__send"
                 type="button"
-                aria-label="Отправить"
-                title="Отправить"
+                aria-label="Send"
+                title="Send"
                 disabled=move || !can_send.get()
                 on:click=move |_| send()
             >

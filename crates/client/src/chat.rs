@@ -35,10 +35,10 @@ pub enum Status {
 impl Status {
     pub fn label(&self) -> &str {
         match self {
-            Self::Sending => "Отправляется",
-            Self::Sent => "Отправлено",
-            Self::Delivered => "Доставлено",
-            Self::Queued => "В очереди — собеседник не в сети",
+            Self::Sending => "Sending",
+            Self::Sent => "Sent",
+            Self::Delivered => "Delivered",
+            Self::Queued => "Queued — peer offline",
             Self::Rejected { message } => message,
         }
     }

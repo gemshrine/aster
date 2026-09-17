@@ -41,14 +41,14 @@ pub enum EndReason {
 impl EndReason {
     pub fn message(self) -> &'static str {
         match self {
-            Self::Hangup | Self::RemoteHangup => "Звонок завершён",
-            Self::Declined => "Собеседник отклонил звонок",
-            Self::Cancelled => "Звонок отменён",
-            Self::Timeout => "Не дозвонились",
-            Self::Failed => "Не удалось установить связь",
-            Self::ConnectionLost => "Связь потеряна",
-            Self::PeerOffline => "Собеседник не в сети",
-            Self::Other => "Звонок завершён",
+            Self::Hangup | Self::RemoteHangup => "Call ended",
+            Self::Declined => "Call declined",
+            Self::Cancelled => "Call cancelled",
+            Self::Timeout => "No answer",
+            Self::Failed => "Could not connect",
+            Self::ConnectionLost => "Connection lost",
+            Self::PeerOffline => "Peer offline",
+            Self::Other => "Call ended",
         }
     }
 }
@@ -62,9 +62,9 @@ impl CallState {
     /// Short line under the peer's tile while the call is not up yet.
     pub fn waiting_label(&self) -> Option<&'static str> {
         match self {
-            Self::Calling => Some("Вызываем…"),
-            Self::Ringing => Some("Входящий звонок"),
-            Self::Connecting => Some("Соединяем…"),
+            Self::Calling => Some("Calling…"),
+            Self::Ringing => Some("Incoming call"),
+            Self::Connecting => Some("Connecting…"),
             _ => None,
         }
     }
