@@ -17,7 +17,7 @@ use client_tauri_lib::core::voice::call::{
 };
 use client_tauri_lib::core::voice::media::signal::{tone_ratio, Sine};
 use client_tauri_lib::core::voice::media::{level_dbfs, FRAME};
-use client_tauri_lib::core::voice::settings::VoiceSettings;
+use client_tauri_lib::core::voice::settings::{NoiseSuppression, VoiceSettings};
 use common::{fast_timing, spawn_server, ALICE, BOB, WAIT};
 use signaling_server::hub::QueueLimits;
 use tokio::sync::mpsc;
@@ -535,11 +535,16 @@ async fn missing_device_falls_back_without_ending_the_call() {
 
 /// Bob's speaker leaks alice's 440 Hz back into his microphone. How much of
 /// it comes back to alice's speaker, relative to bob's own 1000 Hz tone.
+///
+/// Noise suppression and gain stay off at bob: both adapt to a steady tone
+/// over time, which would make the echo level depend on machine speed.
 async fn echo_returned(echo_cancellation: bool) -> f32 {
     let addr = spawn_server(QueueLimits::default()).await;
     let alice = Peer::online(addr, ALICE, 440.0, test_config()).await;
     let settings = VoiceSettings {
         echo_cancellation,
+        noise_suppression: NoiseSuppression::Off,
+        auto_gain: false,
         ..VoiceSettings::default()
     };
     let bob = Peer::with_audio(addr, BOB, 1000.0, test_config(), 0.8, settings).await;
@@ -556,8 +561,10 @@ async fn echo_returned(echo_cancellation: bool) -> f32 {
     })
     .await
     .expect("peer did not come online");
-    let (alice, _bob) = connect(alice, bob).await;
+    let (alice, bob) = connect(alice, bob).await;
 
+    // The echo exists only once alice's voice plays at bob.
+    bob.wait_for_tone(440.0, 400).await;
     alice.wait_for_tone(1000.0, 400).await;
     // Give AEC3 time to converge on the echo path.
     tokio::time::sleep(Duration::from_secs(3)).await;
