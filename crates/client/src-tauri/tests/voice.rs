@@ -9,13 +9,15 @@ use std::time::Duration;
 use client_tauri_lib::core::settings::Settings;
 use client_tauri_lib::core::signaling::{signaling, ConnectionState, SignalingHandle};
 use client_tauri_lib::core::voice::audio::{
-    AudioBackend, AudioStream, CaptureSink, PlaybackSource,
+    AudioBackend, AudioDevice, AudioDevices, AudioStream, CaptureSink, Opened, PlaybackSource,
 };
+use client_tauri_lib::core::voice::call::AudioDirection;
 use client_tauri_lib::core::voice::call::{
     voice, CallConfig, CallError, CallState, EndReason, VoiceEvent, VoiceHandle,
 };
 use client_tauri_lib::core::voice::media::signal::{tone_ratio, Sine};
 use client_tauri_lib::core::voice::media::{level_dbfs, FRAME};
+use client_tauri_lib::core::voice::settings::VoiceSettings;
 use common::{fast_timing, spawn_server, ALICE, BOB, WAIT};
 use signaling_server::hub::QueueLimits;
 use tokio::sync::mpsc;
@@ -24,6 +26,39 @@ use tokio::sync::mpsc;
 struct ToneBackend {
     freq: f32,
     played: Arc<Mutex<Vec<f32>>>,
+    /// `(direction, resolved device)` for every opened stream, in order.
+    opened: Arc<Mutex<Vec<(&'static str, String)>>>,
+}
+
+const INPUTS: [&str; 2] = ["mic-a", "mic-b"];
+const OUTPUTS: [&str; 2] = ["spk-a", "spk-b"];
+
+impl ToneBackend {
+    fn resolve(
+        &self,
+        direction: &'static str,
+        known: &[&str],
+        requested: Option<&str>,
+    ) -> Option<String> {
+        let (device, fallback) = match requested {
+            Some(id) if known.contains(&id) => (id.to_string(), None),
+            Some(id) => (known[0].to_string(), Some(format!("{id} not found"))),
+            None => (known[0].to_string(), None),
+        };
+        self.opened.lock().unwrap().push((direction, device));
+        fallback
+    }
+}
+
+fn list(ids: &[&str]) -> Vec<AudioDevice> {
+    ids.iter()
+        .enumerate()
+        .map(|(i, id)| AudioDevice {
+            id: id.to_string(),
+            name: id.to_uppercase(),
+            is_default: i == 0,
+        })
+        .collect()
 }
 
 struct ThreadStream {
@@ -61,17 +96,32 @@ fn every_frame(mut tick: impl FnMut() + Send + 'static) -> Box<dyn AudioStream> 
 }
 
 impl AudioBackend for ToneBackend {
-    fn capture(&self, mut sink: CaptureSink) -> Result<Box<dyn AudioStream>, String> {
-        let mut sine = Sine::new(self.freq, 0.3);
-        Ok(every_frame(move || sink(&sine.next_frame())))
+    fn devices(&self) -> AudioDevices {
+        AudioDevices {
+            inputs: list(&INPUTS),
+            outputs: list(&OUTPUTS),
+        }
     }
 
-    fn playback(&self, mut source: PlaybackSource) -> Result<Box<dyn AudioStream>, String> {
+    fn capture(&self, device: Option<&str>, mut sink: CaptureSink) -> Result<Opened, String> {
+        let fallback = self.resolve("capture", &INPUTS, device);
+        let mut sine = Sine::new(self.freq, 0.3);
+        Ok(Opened {
+            stream: every_frame(move || sink(&sine.next_frame())),
+            fallback,
+        })
+    }
+
+    fn playback(&self, device: Option<&str>, mut source: PlaybackSource) -> Result<Opened, String> {
+        let fallback = self.resolve("playback", &OUTPUTS, device);
         let played = self.played.clone();
-        Ok(every_frame(move || {
-            let frame = source();
-            played.lock().unwrap().extend_from_slice(&frame);
-        }))
+        Ok(Opened {
+            stream: every_frame(move || {
+                let frame = source();
+                played.lock().unwrap().extend_from_slice(&frame);
+            }),
+            fallback,
+        })
     }
 }
 
@@ -80,6 +130,7 @@ struct Peer {
     voice: VoiceHandle,
     events: mpsc::UnboundedReceiver<VoiceEvent>,
     played: Arc<Mutex<Vec<f32>>>,
+    opened: Arc<Mutex<Vec<(&'static str, String)>>>,
 }
 
 impl Peer {
@@ -89,12 +140,20 @@ impl Peer {
         tokio::spawn(actor);
 
         let played = Arc::new(Mutex::new(Vec::new()));
+        let opened = Arc::new(Mutex::new(Vec::new()));
         let backend = Arc::new(ToneBackend {
             freq,
             played: played.clone(),
+            opened: opened.clone(),
         });
         let (voice_tx, events) = mpsc::unbounded_channel();
-        let (voice, actor) = voice(signaling.clone(), backend, voice_tx, config);
+        let (voice, actor) = voice(
+            signaling.clone(),
+            backend,
+            voice_tx,
+            config,
+            VoiceSettings::default(),
+        );
         tokio::spawn(actor);
 
         let forward = voice.clone();
@@ -118,7 +177,12 @@ impl Peer {
             voice,
             events,
             played,
+            opened,
         }
+    }
+
+    fn opened(&self) -> Vec<(&'static str, String)> {
+        self.opened.lock().unwrap().clone()
     }
 
     async fn wait(&mut self, pred: impl Fn(&VoiceEvent) -> bool) -> VoiceEvent {
@@ -367,6 +431,82 @@ async fn caller_going_offline_ends_ringing() {
     alice.signaling.disconnect();
     alice.wait_ended(EndReason::ConnectionLost).await;
     bob.wait_ended(EndReason::PeerOffline).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn output_device_switches_during_a_call() {
+    let (mut alice, mut bob) = connected_call().await;
+    bob.wait(|e| matches!(e, VoiceEvent::Audio(a) if a.remote_speaking))
+        .await;
+    assert_eq!(
+        bob.opened(),
+        [
+            ("capture", "mic-a".to_string()),
+            ("playback", "spk-a".to_string())
+        ]
+    );
+
+    bob.voice
+        .set_settings(VoiceSettings {
+            input_device: None,
+            output_device: Some("spk-b".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        bob.opened().last(),
+        Some(&("playback", "spk-b".to_string()))
+    );
+    assert_eq!(
+        bob.opened().iter().filter(|(d, _)| *d == "capture").count(),
+        1,
+        "capture must not restart"
+    );
+
+    // Audio keeps flowing to the new device and the call survives.
+    let before = bob.played.lock().unwrap().len();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let tail = bob.played_tail(300);
+    assert!(bob.played.lock().unwrap().len() > before);
+    assert!(
+        level_dbfs(&tail) > -20.0,
+        "{} dBFS after switch",
+        level_dbfs(&tail)
+    );
+    assert!(matches!(bob.voice.state(), CallState::Connected { .. }));
+    assert!(matches!(alice.voice.state(), CallState::Connected { .. }));
+    alice.voice.hang_up().await.unwrap();
+    alice.wait_ended(EndReason::Hangup).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_device_falls_back_without_ending_the_call() {
+    let (mut alice, mut bob) = both_online(test_config()).await;
+    bob.voice
+        .set_settings(VoiceSettings {
+            input_device: Some("unplugged-headset".into()),
+            output_device: None,
+        })
+        .await
+        .unwrap();
+
+    alice.voice.start_call().await.unwrap();
+    bob.wait_state(CallState::Ringing).await;
+    bob.voice.accept_call().await.unwrap();
+    let error = bob
+        .wait(|e| matches!(e, VoiceEvent::AudioError { .. }))
+        .await;
+    assert!(matches!(
+        error,
+        VoiceEvent::AudioError { direction: AudioDirection::Capture, ref message }
+            if message.contains("unplugged-headset")
+    ));
+    bob.wait_connected().await;
+    assert_eq!(bob.opened()[0], ("capture", "mic-a".to_string()));
+
+    alice
+        .wait(|e| matches!(e, VoiceEvent::Audio(a) if a.remote_speaking))
+        .await;
 }
 
 #[test]

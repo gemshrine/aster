@@ -10,7 +10,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [dependencies]
 async-trait = "0.1.92"
 bytes = "1.12.1"
-cpal = { version = "0.18", optional = true }
+cpal = { version = "0.18", optional = true, features = ["pulseaudio"] }
 fastrand = "2.5.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 opus-pure = "0.2"
