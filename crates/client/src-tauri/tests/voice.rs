@@ -155,6 +155,26 @@ impl Peer {
         played[played.len() - len..].to_vec()
     }
 
+    /// Waits for the call to be back at idle.
+    ///
+    /// `ended` is momentary (spec 0011): the core emits it and returns to
+    /// `idle` right after, so reading the state the instant the end event
+    /// arrives is a race.
+    async fn expect_idle(&self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let state = self.voice.state();
+            if state == CallState::Idle {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "call did not return to idle, still {state:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     /// Waits until the tail of the speaker signal is a clean `freq` tone.
     ///
     /// The first tail after `connected` can still hold silence, PLC frames or
@@ -248,7 +268,7 @@ async fn call_connects_and_audio_flows_both_ways() {
     alice.voice.hang_up().await.unwrap();
     alice.wait_ended(EndReason::Hangup).await;
     bob.wait_ended(EndReason::RemoteHangup).await;
-    assert_eq!(bob.voice.state(), CallState::Idle);
+    bob.expect_idle().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -288,7 +308,7 @@ async fn declined_call_ends_for_both() {
     bob.voice.decline_call().await.unwrap();
     bob.wait_ended(EndReason::Declined).await;
     alice.wait_ended(EndReason::Declined).await;
-    assert_eq!(alice.voice.state(), CallState::Idle);
+    alice.expect_idle().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -314,7 +334,7 @@ async fn unanswered_call_times_out() {
     alice.wait_ended(EndReason::Timeout).await;
     bob.wait(|e| matches!(e, VoiceEvent::State(CallState::Ended { .. })))
         .await;
-    assert_eq!(bob.voice.state(), CallState::Idle);
+    bob.expect_idle().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
