@@ -30,6 +30,7 @@ use webrtc::rtp_transceiver::RtpSender;
 
 use super::audio::{AudioBackend, AudioStream};
 use super::media::{Encoder, Frame, JitterBuffer, Vad, FRAME, SILENCE};
+use super::settings::VoiceSettings;
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -117,6 +118,7 @@ enum Command {
     Decline,
     HangUp,
     SetMuted(bool),
+    UpdateSettings(VoiceSettings),
 }
 
 enum Input {
@@ -161,6 +163,11 @@ impl VoiceHandle {
         self.command(Command::SetMuted(muted)).await
     }
 
+    /// Applies immediately, including to a call in progress.
+    pub async fn set_settings(&self, settings: VoiceSettings) -> Result<(), CallError> {
+        self.command(Command::UpdateSettings(settings)).await
+    }
+
     /// Feeds signaling events to the call; call in event order.
     pub fn core_event(&self, event: &CoreEvent) {
         let relevant = matches!(
@@ -193,6 +200,7 @@ pub fn voice(
     backend: Arc<dyn AudioBackend>,
     events: mpsc::UnboundedSender<VoiceEvent>,
     config: CallConfig,
+    settings: VoiceSettings,
 ) -> (VoiceHandle, impl Future<Output = ()> + Send + 'static) {
     let (inputs_tx, inputs) = mpsc::unbounded_channel();
     let (pc_tx, pc_rx) = mpsc::unbounded_channel();
@@ -210,6 +218,7 @@ pub fn voice(
         events,
         state: state_tx,
         config,
+        settings,
         phase: Phase::Idle,
         generation: 0,
         muted: false,
@@ -240,8 +249,10 @@ struct Session {
 }
 
 struct Media {
-    _capture: Option<Box<dyn AudioStream>>,
-    _playback: Option<Box<dyn AudioStream>>,
+    capture: Option<Box<dyn AudioStream>>,
+    playback: Option<Box<dyn AudioStream>>,
+    /// Kept so a new capture stream can feed the running encoder.
+    frames: mpsc::Sender<Frame>,
     encoder: JoinHandle<()>,
 }
 
@@ -335,6 +346,7 @@ struct Actor {
     events: mpsc::UnboundedSender<VoiceEvent>,
     state: watch::Sender<CallState>,
     config: CallConfig,
+    settings: VoiceSettings,
     phase: Phase,
     generation: u64,
     muted: bool,
@@ -411,6 +423,10 @@ impl Actor {
                 }
                 self.send_call_end().await;
                 self.end(EndReason::Hangup);
+                Ok(())
+            }
+            Command::UpdateSettings(settings) => {
+                self.apply_settings(settings);
                 Ok(())
             }
             Command::SetMuted(muted) => {
@@ -798,19 +814,12 @@ impl Actor {
         let ssrc = session.track.ssrcs().await.first().copied();
 
         let (frames_tx, mut frames_rx) = mpsc::channel::<Frame>(25);
-        let capture = match self.backend.capture(Box::new(move |frame| {
-            // Dropping a frame beats blocking the audio thread.
-            let _ = frames_tx.try_send(*frame);
-        })) {
-            Ok(stream) => Some(stream),
-            Err(message) => {
-                self.emit(VoiceEvent::AudioError {
-                    direction: AudioDirection::Capture,
-                    message,
-                });
-                None
-            }
-        };
+        let capture = open_capture(
+            &*self.backend,
+            self.settings.input_device.as_deref(),
+            frames_tx.clone(),
+            &self.events,
+        );
 
         let track = session.track.clone();
         let flags = session.flags.clone();
@@ -839,31 +848,50 @@ impl Actor {
             }
         });
 
-        let jitter = session.jitter.clone();
-        let flags = session.flags.clone();
-        let mut vad = Vad::default();
-        let playback = match self.backend.playback(Box::new(move || {
-            let frame = jitter.lock().unwrap().pop();
-            flags
-                .remote_speaking
-                .store(vad.update(&frame), Ordering::Relaxed);
-            frame
-        })) {
-            Ok(stream) => Some(stream),
-            Err(message) => {
-                self.emit(VoiceEvent::AudioError {
-                    direction: AudioDirection::Playback,
-                    message,
-                });
-                None
-            }
-        };
+        let playback = open_playback(
+            &*self.backend,
+            self.settings.output_device.as_deref(),
+            session.jitter.clone(),
+            session.flags.clone(),
+            &self.events,
+        );
 
         session.media = Some(Media {
-            _capture: capture,
-            _playback: playback,
+            capture,
+            playback,
+            frames: frames_tx,
             encoder,
         });
+    }
+
+    fn apply_settings(&mut self, settings: VoiceSettings) {
+        let previous = std::mem::replace(&mut self.settings, settings);
+        let Phase::Connected { session, .. } = &mut self.phase else {
+            return;
+        };
+        let Some(media) = session.media.as_mut() else {
+            return;
+        };
+        if previous.input_device != self.settings.input_device {
+            // Release the old device before opening the new one.
+            media.capture = None;
+            media.capture = open_capture(
+                &*self.backend,
+                self.settings.input_device.as_deref(),
+                media.frames.clone(),
+                &self.events,
+            );
+        }
+        if previous.output_device != self.settings.output_device {
+            media.playback = None;
+            media.playback = open_playback(
+                &*self.backend,
+                self.settings.output_device.as_deref(),
+                session.jitter.clone(),
+                session.flags.clone(),
+                &self.events,
+            );
+        }
     }
 
     fn refresh_audio(&mut self) {
@@ -913,6 +941,61 @@ impl Actor {
     fn emit(&self, event: VoiceEvent) {
         let _ = self.events.send(event);
     }
+}
+
+fn open_capture(
+    backend: &dyn AudioBackend,
+    device: Option<&str>,
+    frames: mpsc::Sender<Frame>,
+    events: &mpsc::UnboundedSender<VoiceEvent>,
+) -> Option<Box<dyn AudioStream>> {
+    let sink = Box::new(move |frame: &Frame| {
+        // Dropping a frame beats blocking the audio thread.
+        let _ = frames.try_send(*frame);
+    });
+    opened(
+        backend.capture(device, sink),
+        AudioDirection::Capture,
+        events,
+    )
+}
+
+fn open_playback(
+    backend: &dyn AudioBackend,
+    device: Option<&str>,
+    jitter: Arc<Mutex<JitterBuffer>>,
+    flags: Arc<Flags>,
+    events: &mpsc::UnboundedSender<VoiceEvent>,
+) -> Option<Box<dyn AudioStream>> {
+    let mut vad = Vad::default();
+    let source = Box::new(move || {
+        let frame = jitter.lock().unwrap().pop();
+        flags
+            .remote_speaking
+            .store(vad.update(&frame), Ordering::Relaxed);
+        frame
+    });
+    opened(
+        backend.playback(device, source),
+        AudioDirection::Playback,
+        events,
+    )
+}
+
+/// Reports fallbacks and failures; a missing device never ends the call.
+fn opened(
+    result: Result<super::audio::Opened, String>,
+    direction: AudioDirection,
+    events: &mpsc::UnboundedSender<VoiceEvent>,
+) -> Option<Box<dyn AudioStream>> {
+    let (stream, message) = match result {
+        Ok(opened) => (Some(opened.stream), opened.fallback),
+        Err(message) => (None, Some(message)),
+    };
+    if let Some(message) = message {
+        let _ = events.send(VoiceEvent::AudioError { direction, message });
+    }
+    stream
 }
 
 struct PcHandler {

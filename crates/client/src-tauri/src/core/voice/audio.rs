@@ -1,5 +1,7 @@
 //! Audio device abstraction, see `specs/0011-voice-core.md`.
 
+use serde::Serialize;
+
 use super::media::Frame;
 
 pub type CaptureSink = Box<dyn FnMut(&Frame) + Send>;
@@ -8,10 +10,31 @@ pub type PlaybackSource = Box<dyn FnMut() -> Frame + Send>;
 /// Keeps a capture or playback stream alive; dropping it stops the stream.
 pub trait AudioStream: Send + Sync {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct AudioDevices {
+    pub inputs: Vec<AudioDevice>,
+    pub outputs: Vec<AudioDevice>,
+}
+
+pub struct Opened {
+    pub stream: Box<dyn AudioStream>,
+    /// Set when the requested device is gone and the system default is used.
+    pub fallback: Option<String>,
+}
+
 /// Delivers 48 kHz mono 20 ms frames to and from the sound system.
 pub trait AudioBackend: Send + Sync {
-    fn capture(&self, sink: CaptureSink) -> Result<Box<dyn AudioStream>, String>;
-    fn playback(&self, source: PlaybackSource) -> Result<Box<dyn AudioStream>, String>;
+    fn devices(&self) -> AudioDevices;
+    /// `device` is an id from [`AudioBackend::devices`]; `None` is the default.
+    fn capture(&self, device: Option<&str>, sink: CaptureSink) -> Result<Opened, String>;
+    fn playback(&self, device: Option<&str>, source: PlaybackSource) -> Result<Opened, String>;
 }
 
 /// No sound at all: builds without audio devices (`audio-device` off).
@@ -21,12 +44,22 @@ struct NullStream;
 impl AudioStream for NullStream {}
 
 impl AudioBackend for NullBackend {
-    fn capture(&self, _sink: CaptureSink) -> Result<Box<dyn AudioStream>, String> {
-        Ok(Box::new(NullStream))
+    fn devices(&self) -> AudioDevices {
+        AudioDevices::default()
     }
 
-    fn playback(&self, _source: PlaybackSource) -> Result<Box<dyn AudioStream>, String> {
-        Ok(Box::new(NullStream))
+    fn capture(&self, _device: Option<&str>, _sink: CaptureSink) -> Result<Opened, String> {
+        Ok(Opened {
+            stream: Box::new(NullStream),
+            fallback: None,
+        })
+    }
+
+    fn playback(&self, _device: Option<&str>, _source: PlaybackSource) -> Result<Opened, String> {
+        Ok(Opened {
+            stream: Box::new(NullStream),
+            fallback: None,
+        })
     }
 }
 
@@ -79,7 +112,10 @@ mod device {
     };
 
     use super::super::media::{Framer, FRAME, SAMPLE_RATE};
-    use super::{AudioBackend, AudioStream, CaptureSink, PlaybackSource, Resampler};
+    use super::{
+        AudioBackend, AudioDevice, AudioDevices, AudioStream, CaptureSink, Opened, PlaybackSource,
+        Resampler,
+    };
 
     pub struct CpalBackend;
 
@@ -103,40 +139,97 @@ mod device {
 
     fn spawn_stream(
         name: &'static str,
-        build: impl FnOnce() -> Result<cpal::Stream, String> + Send + 'static,
-    ) -> Result<Box<dyn AudioStream>, String> {
+        build: impl FnOnce() -> Result<(cpal::Stream, Option<String>), String> + Send + 'static,
+    ) -> Result<Opened, String> {
         let (ready_tx, ready_rx) = mpsc::channel();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let thread = thread::Builder::new()
             .name(format!("aster-{name}"))
             .spawn(move || {
-                let stream = match build().and_then(|stream| {
+                let (stream, fallback) = match build().and_then(|(stream, fallback)| {
                     stream.play().map_err(|err| err.to_string())?;
-                    Ok(stream)
+                    Ok((stream, fallback))
                 }) {
-                    Ok(stream) => stream,
+                    Ok(built) => built,
                     Err(err) => {
                         let _ = ready_tx.send(Err(err));
                         return;
                     }
                 };
-                let _ = ready_tx.send(Ok(()));
+                let _ = ready_tx.send(Ok(fallback));
                 // Returns once the handle drops its sender.
                 let _ = stop_rx.recv();
                 drop(stream);
             })
             .map_err(|err| err.to_string())?;
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Box::new(ThreadStream {
-                stop: Some(stop_tx),
-                thread: Some(thread),
-            })),
+            Ok(Ok(fallback)) => Ok(Opened {
+                stream: Box::new(ThreadStream {
+                    stop: Some(stop_tx),
+                    thread: Some(thread),
+                }),
+                fallback,
+            }),
             Ok(Err(err)) => {
                 let _ = thread.join();
                 Err(err)
             }
             Err(_) => Err(format!("{name} thread exited")),
         }
+    }
+
+    #[derive(Clone, Copy)]
+    enum Direction {
+        Input,
+        Output,
+    }
+
+    /// The requested device, or the default with a note why.
+    fn resolve(
+        host: &cpal::Host,
+        requested: Option<&str>,
+        direction: Direction,
+    ) -> Result<(cpal::Device, Option<String>), String> {
+        let mut fallback = None;
+        if let Some(id) = requested {
+            let found = id
+                .parse::<cpal::DeviceId>()
+                .ok()
+                .and_then(|id| host.device_by_id(&id));
+            match found {
+                Some(device) => return Ok((device, None)),
+                None => fallback = Some(format!("device {id} not found, using the system default")),
+            }
+        }
+        let device = match direction {
+            Direction::Input => host.default_input_device().ok_or("no input device")?,
+            Direction::Output => host.default_output_device().ok_or("no output device")?,
+        };
+        Ok((device, fallback))
+    }
+
+    fn describe(
+        devices: Result<impl Iterator<Item = cpal::Device>, cpal::Error>,
+        default: Option<cpal::Device>,
+    ) -> Vec<AudioDevice> {
+        let default_id = default.and_then(|d| d.id().ok()).map(|id| id.to_string());
+        let Ok(devices) = devices else {
+            return Vec::new();
+        };
+        devices
+            .filter_map(|device| {
+                let id = device.id().ok()?.to_string();
+                let name = device
+                    .description()
+                    .map(|d| d.name().to_string())
+                    .unwrap_or_else(|_| id.clone());
+                Some(AudioDevice {
+                    is_default: default_id.as_deref() == Some(id.as_str()),
+                    id,
+                    name,
+                })
+            })
+            .collect()
     }
 
     /// Prefers 48 kHz so no resampling is needed.
@@ -151,43 +244,59 @@ mod device {
     }
 
     impl AudioBackend for CpalBackend {
-        fn capture(&self, sink: CaptureSink) -> Result<Box<dyn AudioStream>, String> {
+        fn devices(&self) -> AudioDevices {
+            let host = cpal::default_host();
+            AudioDevices {
+                inputs: describe(host.input_devices(), host.default_input_device()),
+                outputs: describe(host.output_devices(), host.default_output_device()),
+            }
+        }
+
+        fn capture(&self, device: Option<&str>, sink: CaptureSink) -> Result<Opened, String> {
+            let requested = device.map(str::to_string);
             spawn_stream("capture", move || {
-                let device = cpal::default_host()
-                    .default_input_device()
-                    .ok_or("no input device")?;
+                let (device, fallback) = resolve(
+                    &cpal::default_host(),
+                    requested.as_deref(),
+                    Direction::Input,
+                )?;
                 let default = device.default_input_config().map_err(|e| e.to_string())?;
                 let config = match device.supported_input_configs() {
                     Ok(supported) => pick_config(default, supported),
                     Err(_) => default,
                 };
-                match config.sample_format() {
+                let stream = match config.sample_format() {
                     SampleFormat::F32 => build_input::<f32>(&device, config.config(), sink),
                     SampleFormat::I16 => build_input::<i16>(&device, config.config(), sink),
                     SampleFormat::I32 => build_input::<i32>(&device, config.config(), sink),
                     SampleFormat::U16 => build_input::<u16>(&device, config.config(), sink),
                     other => Err(format!("unsupported input sample format {other}")),
-                }
+                }?;
+                Ok((stream, fallback))
             })
         }
 
-        fn playback(&self, source: PlaybackSource) -> Result<Box<dyn AudioStream>, String> {
+        fn playback(&self, device: Option<&str>, source: PlaybackSource) -> Result<Opened, String> {
+            let requested = device.map(str::to_string);
             spawn_stream("playback", move || {
-                let device = cpal::default_host()
-                    .default_output_device()
-                    .ok_or("no output device")?;
+                let (device, fallback) = resolve(
+                    &cpal::default_host(),
+                    requested.as_deref(),
+                    Direction::Output,
+                )?;
                 let default = device.default_output_config().map_err(|e| e.to_string())?;
                 let config = match device.supported_output_configs() {
                     Ok(supported) => pick_config(default, supported),
                     Err(_) => default,
                 };
-                match config.sample_format() {
+                let stream = match config.sample_format() {
                     SampleFormat::F32 => build_output::<f32>(&device, config.config(), source),
                     SampleFormat::I16 => build_output::<i16>(&device, config.config(), source),
                     SampleFormat::I32 => build_output::<i32>(&device, config.config(), source),
                     SampleFormat::U16 => build_output::<u16>(&device, config.config(), source),
                     other => Err(format!("unsupported output sample format {other}")),
-                }
+                }?;
+                Ok((stream, fallback))
             })
         }
     }
@@ -295,6 +404,18 @@ mod tests {
         assert!(back.len().abs_diff(input.len()) <= 3);
         let tail = &back[back.len() - 9600..];
         assert!(tone_ratio(tail, 440.0) > 0.9, "{}", tone_ratio(tail, 440.0));
+    }
+
+    /// Lists the machine's real devices without opening any stream:
+    /// `cargo test -p client-tauri lists_real_devices -- --ignored --nocapture`.
+    #[cfg(feature = "audio-device")]
+    #[test]
+    #[ignore = "needs a sound system"]
+    fn lists_real_devices() {
+        let devices = CpalBackend.devices();
+        println!("{devices:#?}");
+        assert!(!devices.outputs.is_empty(), "no output devices found");
+        assert!(devices.outputs.iter().filter(|d| d.is_default).count() <= 1);
     }
 
     #[test]

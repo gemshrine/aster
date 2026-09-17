@@ -10,14 +10,18 @@ use uuid::Uuid;
 use crate::core::chat::{Chat, ChatError, Message};
 use crate::core::settings::Settings;
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
+use crate::core::voice::audio::{AudioBackend, AudioDevices};
 use crate::core::voice::call::{CallError, CallState, VoiceEvent, VoiceHandle};
+use crate::core::voice::settings::VoiceSettings;
 
 pub struct AppState {
     pub attention: std::sync::Arc<crate::attention::Attention>,
     pub signaling: SignalingHandle,
     pub chat: Arc<Chat>,
     pub voice: VoiceHandle,
+    pub audio: Arc<dyn AudioBackend>,
     pub settings_path: PathBuf,
+    pub voice_settings_path: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,6 +157,33 @@ pub async fn set_muted(state: State<'_, AppState>, muted: bool) -> Result<(), Co
 #[tauri::command(rename_all = "snake_case")]
 pub fn call_state(state: State<'_, AppState>) -> CallState {
     state.voice.state()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_audio_devices(state: State<'_, AppState>) -> Result<AudioDevices, CommandError> {
+    let audio = state.audio.clone();
+    // Device enumeration can block on the sound server.
+    tauri::async_runtime::spawn_blocking(move || audio.devices())
+        .await
+        .map_err(|err| CommandError::new("io", err.to_string()))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_voice_settings(state: State<'_, AppState>) -> VoiceSettings {
+    VoiceSettings::load(&state.voice_settings_path)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_voice_settings(
+    state: State<'_, AppState>,
+    settings: VoiceSettings,
+) -> Result<VoiceSettings, CommandError> {
+    let settings = settings.normalized();
+    settings
+        .save(&state.voice_settings_path)
+        .map_err(|err| CommandError::new("io", err.to_string()))?;
+    state.voice.set_settings(settings.clone()).await?;
+    Ok(settings)
 }
 
 #[derive(Clone, Serialize)]

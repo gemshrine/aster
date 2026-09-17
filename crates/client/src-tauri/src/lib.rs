@@ -13,6 +13,7 @@ use crate::core::settings::Settings;
 use crate::core::signaling::{signaling, Timing};
 use crate::core::voice::audio::AudioBackend;
 use crate::core::voice::call::{voice, CallConfig};
+use crate::core::voice::settings::VoiceSettings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,6 +23,7 @@ pub fn run() {
         .setup(|app| {
             let attention = Arc::new(attention::Attention::install(app.handle())?);
             let settings_path = app.path().app_config_dir()?.join("settings.json");
+            let voice_settings_path = app.path().app_config_dir()?.join("voice.json");
             let history = ChatStore::open(&app.path().app_data_dir()?.join("history.sqlite3"))
                 .map_err(|err| err.to_string())?;
 
@@ -30,11 +32,13 @@ pub fn run() {
             tauri::async_runtime::spawn(actor);
 
             let (voice_tx, mut voice_events) = mpsc::unbounded_channel();
+            let audio = audio_backend();
             let (voice, voice_actor) = voice(
                 signaling.clone(),
-                audio_backend(),
+                audio.clone(),
                 voice_tx,
                 CallConfig::default(),
+                VoiceSettings::load(&voice_settings_path),
             );
             tauri::async_runtime::spawn(voice_actor);
 
@@ -86,8 +90,10 @@ pub fn run() {
                 signaling,
                 chat,
                 voice,
+                audio,
                 settings_path,
                 attention,
+                voice_settings_path,
             });
             Ok(())
         })
@@ -108,6 +114,9 @@ pub fn run() {
             commands::call_state,
             commands::set_window_focused,
             commands::focus_window,
+            commands::list_audio_devices,
+            commands::get_voice_settings,
+            commands::set_voice_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aster client");
