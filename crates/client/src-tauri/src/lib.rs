@@ -19,6 +19,11 @@ use crate::core::voice::settings::VoiceSettings;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin: a second launch has to hand over to the
+        // running instance before anything else starts (#80).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            attention::focus_window(app);
+        }))
         .plugin(tauri_plugin_notification::init())
         .on_window_event(attention::hide_on_close)
         .setup(|app| {
