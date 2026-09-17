@@ -12,6 +12,13 @@ version = "0.1.0"
 edition = "2021"
 
 # Voice DSP must keep up with real time in debug builds too (specs/0013).
+# Dependencies carry the audio path — Opus, SRTP, the WebRTC stack — and in a
+# plain debug build they eat a real part of every 20 ms frame. Optimising
+# dependencies keeps our own crates debuggable while `cargo tauri dev` stays
+# usable, even with two clients on one machine (#83).
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.dev.package.aec3]
 opt-level = 3
 
