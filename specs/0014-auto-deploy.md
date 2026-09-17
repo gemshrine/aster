@@ -20,12 +20,12 @@
 2. **`deploy`** — после `image`, по SSH на VPS:
    ```bash
    cd ~/aster
-   git fetch origin main && git reset --hard origin/main
+   git fetch origin && git reset --hard <sha>
    cd deploy
    ASTER_IMAGE_TAG=<sha> docker compose pull signaling-server
    ASTER_IMAGE_TAG=<sha> docker compose up -d
    ```
-   `git reset --hard` на VPS допустим: там не ведётся разработка, а секреты лежат в `deploy/.env`, который в `.gitignore`.
+   Сброс на `<sha>`, а не на `origin/main`: повторный запуск старого workflow возвращает и compose-файлы, и образ ровно к тому коммиту. `git reset --hard` на VPS допустим: там не ведётся разработка, а секреты лежат в `deploy/.env`, который в `.gitignore`.
 3. **Проверка:** `curl -fsS https://$ASTER_DOMAIN/health` с ретраями до 60 с. Не ответил — job красный.
 
 Деплой и CI (`ci.yml`) — разные workflow: CI уже прошёл на PR, мерж не ждёт повторного прогона тестов.
