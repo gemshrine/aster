@@ -116,7 +116,7 @@ impl Attention {
         let icon = if count > 0 { &self.marked } else { &self.plain };
         let _ = self.tray.set_icon(Some(icon.clone()));
         if let Err(err) = app.emit("unread", Unread { count }) {
-            eprintln!("failed to emit unread: {err}");
+            crate::log_line!("failed to emit unread: {err}");
         }
     }
 }
@@ -152,7 +152,7 @@ fn toggle_window(app: &AppHandle) {
 
 fn notify(app: &AppHandle, title: &str, body: &str) {
     if let Err(err) = app.notification().builder().title(title).body(body).show() {
-        eprintln!("notification not shown: {err}");
+        crate::log_line!("notification not shown: {err}");
     }
 }
 

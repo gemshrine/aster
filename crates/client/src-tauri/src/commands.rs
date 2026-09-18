@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::core::chat::{Chat, ChatError, Message};
@@ -230,9 +230,10 @@ pub fn emit_voice(app: &AppHandle, event: VoiceEvent) {
             app.emit("call-audio-error", AudioError { direction, message })
         }
         VoiceEvent::InputLevel { dbfs } => app.emit("input-level", InputLevel { dbfs }),
+        VoiceEvent::Transport(status) => app.emit("call-transport", status),
     };
     if let Err(err) = result {
-        eprintln!("failed to emit event: {err}");
+        crate::log_line!("failed to emit event: {err}");
     }
 }
 
@@ -247,6 +248,27 @@ pub fn set_window_focused(state: State<'_, AppState>, app: AppHandle, focused: b
     }
 }
 
+/// Opens the folder holding `aster.log` so it can be sent over (specs/0015).
+#[tauri::command(rename_all = "snake_case")]
+pub fn open_log_dir(app: AppHandle) -> Result<(), CommandError> {
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|err| CommandError::new("io", err.to_string()))?;
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
+        .arg(&dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| CommandError::new("io", format!("{opener}: {err}")))
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn focus_window(app: AppHandle) {
     crate::attention::focus_window(&app);
@@ -259,7 +281,7 @@ struct PeerStatus {
 
 pub fn emit_upsert(app: &AppHandle, message: Message) {
     if let Err(err) = app.emit("message-upserted", message) {
-        eprintln!("failed to emit event: {err}");
+        crate::log_line!("failed to emit event: {err}");
     }
 }
 
@@ -274,11 +296,11 @@ pub fn emit(app: &AppHandle, event: CoreEvent) {
         | CoreEvent::ChatRejected { .. } => Ok(()),
         CoreEvent::Signal(_) => Ok(()),
         CoreEvent::ServerError { code, message } => {
-            eprintln!("signaling-server error {code:?}: {message}");
+            crate::log_line!("signaling-server error {code:?}: {message}");
             Ok(())
         }
     };
     if let Err(err) = result {
-        eprintln!("failed to emit event: {err}");
+        crate::log_line!("failed to emit event: {err}");
     }
 }

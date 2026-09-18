@@ -69,13 +69,13 @@ impl VoiceSettings {
             Ok(raw) => match serde_json::from_str::<VoiceSettings>(&raw) {
                 Ok(settings) => settings.normalized(),
                 Err(err) => {
-                    eprintln!("ignoring unreadable voice settings: {err}");
+                    crate::log_line!("ignoring unreadable voice settings: {err}");
                     Self::default()
                 }
             },
             Err(err) if err.kind() == io::ErrorKind::NotFound => Self::default(),
             Err(err) => {
-                eprintln!("ignoring unreadable voice settings: {err}");
+                crate::log_line!("ignoring unreadable voice settings: {err}");
                 Self::default()
             }
         }
