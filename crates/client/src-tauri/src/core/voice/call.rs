@@ -24,7 +24,7 @@ use webrtc::media_stream::Track;
 use webrtc::peer_connection::{
     MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
     RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceConnectionState, RTCIceGatheringState,
-    RTCIceServer, RTCPeerConnectionIceErrorEvent, RTCPeerConnectionIceEvent,
+    RTCIceServer, RTCIceTransportPolicy, RTCPeerConnectionIceErrorEvent, RTCPeerConnectionIceEvent,
     RTCPeerConnectionState, RTCSessionDescription, StatsSelector,
 };
 use webrtc::rtp_transceiver::RtpSender;
@@ -34,7 +34,7 @@ use super::media::{
     Encoder, Frame, Gate, GateInput, JitterBuffer, LevelMeter, Vad, FRAME, SILENCE,
 };
 use super::processing::{Dsp, DspInput, ProcessingConfig};
-use super::settings::{InputMode, VoiceSettings};
+use super::settings::{IceTransportPolicy, InputMode, VoiceSettings};
 use super::transport::{selected_pair, CandidateKind, SelectedPair, TransportStatus};
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 
@@ -876,20 +876,11 @@ impl Actor {
         media_engine
             .register_default_codecs()
             .map_err(|_| CallError::Failed)?;
-        let ice_servers = self
-            .signaling
-            .ice_servers()
-            .into_iter()
-            .map(|server| RTCIceServer {
-                urls: server.urls,
-                username: server.username.unwrap_or_default(),
-                credential: server.credential.unwrap_or_default(),
-            })
-            .collect();
         let pc = PeerConnectionBuilder::new()
             .with_configuration(
                 RTCConfigurationBuilder::default()
-                    .with_ice_servers(ice_servers)
+                    .with_ice_servers(ice_servers(&self.signaling))
+                    .with_ice_transport_policy(policy(self.settings.ice_transport_policy))
                     .build(),
             )
             .with_media_engine(media_engine)
@@ -1346,6 +1337,140 @@ fn sdp_session_id(sdp: &str) -> Option<u64> {
         .find_map(|line| line.strip_prefix("o="))
         .and_then(|origin| origin.split_whitespace().nth(1))
         .and_then(|id| id.parse().ok())
+}
+
+fn ice_servers(signaling: &SignalingHandle) -> Vec<RTCIceServer> {
+    signaling
+        .ice_servers()
+        .into_iter()
+        .map(|server| RTCIceServer {
+            urls: server.urls,
+            username: server.username.unwrap_or_default(),
+            credential: server.credential.unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn policy(policy: IceTransportPolicy) -> RTCIceTransportPolicy {
+    match policy {
+        IceTransportPolicy::All => RTCIceTransportPolicy::All,
+        IceTransportPolicy::Relay => RTCIceTransportPolicy::Relay,
+    }
+}
+
+/// What the current ICE servers give this network, without a second person
+/// on the other end: no `srflx` means STUN is blocked, no `relay` means TURN
+/// is not usable. See `specs/0015-call-diagnostics.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TurnCheck {
+    pub host: u32,
+    pub srflx: u32,
+    pub relay: u32,
+    pub errors: Vec<String>,
+}
+
+enum Gathered {
+    Candidate(CandidateKind),
+    Error(String),
+    Done,
+}
+
+struct GatherHandler {
+    events: mpsc::UnboundedSender<Gathered>,
+}
+
+#[async_trait::async_trait]
+impl PeerConnectionEventHandler for GatherHandler {
+    async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
+        if let Some(kind) = CandidateKind::from_type(event.candidate.typ) {
+            let _ = self.events.send(Gathered::Candidate(kind));
+        }
+    }
+
+    async fn on_ice_candidate_error(&self, event: RTCPeerConnectionIceErrorEvent) {
+        let _ = self.events.send(Gathered::Error(format!(
+            "{} returned {} {}",
+            event.url, event.error_code, event.error_text
+        )));
+    }
+
+    async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
+        if state == RTCIceGatheringState::Complete {
+            let _ = self.events.send(Gathered::Done);
+        }
+    }
+}
+
+pub async fn check_turn(
+    signaling: &SignalingHandle,
+    config: &CallConfig,
+    timeout: Duration,
+) -> Result<TurnCheck, String> {
+    let (events_tx, mut events) = mpsc::unbounded_channel();
+    let mut media_engine = MediaEngine::default();
+    media_engine
+        .register_default_codecs()
+        .map_err(|err| err.to_string())?;
+    let pc = PeerConnectionBuilder::new()
+        .with_configuration(
+            RTCConfigurationBuilder::default()
+                .with_ice_servers(ice_servers(signaling))
+                .build(),
+        )
+        .with_media_engine(media_engine)
+        .with_handler(Arc::new(GatherHandler { events: events_tx }))
+        .with_udp_addrs(config.udp_addrs.clone())
+        .build()
+        .await
+        .map_err(|err| err.to_string())?;
+
+    // Gathering only starts once there is something to negotiate.
+    let track = Arc::new(
+        TrackLocalStaticSample::new(MediaStreamTrack::new(
+            "aster".to_string(),
+            "probe".to_string(),
+            "probe".to_string(),
+            RtpCodecKind::Audio,
+            vec![RTCRtpEncodingParameters::default()],
+        ))
+        .map_err(|err| err.to_string())?,
+    );
+    let mut check = TurnCheck::default();
+    let deadline = Instant::now() + timeout;
+    let started = async {
+        pc.add_track(track as Arc<dyn TrackLocal>)
+            .await
+            .map_err(|err| err.to_string())?;
+        let offer = pc.create_offer(None).await.map_err(|err| err.to_string())?;
+        pc.set_local_description(offer)
+            .await
+            .map_err(|err| err.to_string())
+    }
+    .await;
+    if let Err(err) = started {
+        let _ = pc.close().await;
+        return Err(err);
+    }
+
+    // Gathering ends by itself on success; the deadline is the answer for a
+    // server that never replies, and what was gathered so far still counts.
+    while let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.recv()).await {
+        match event {
+            Gathered::Candidate(CandidateKind::Host) => check.host += 1,
+            Gathered::Candidate(CandidateKind::Srflx) => check.srflx += 1,
+            Gathered::Candidate(CandidateKind::Relay) => check.relay += 1,
+            Gathered::Candidate(CandidateKind::Prflx) => {}
+            Gathered::Error(error) => {
+                if !check.errors.contains(&error) {
+                    check.errors.push(error);
+                }
+            }
+            Gathered::Done => break,
+        }
+    }
+    let _ = pc.close().await;
+    crate::log_line!("turn check: {check:?}");
+    Ok(check)
 }
 
 fn now_ms() -> i64 {
