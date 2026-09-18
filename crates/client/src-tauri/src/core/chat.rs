@@ -405,7 +405,7 @@ impl Chat {
         };
         match result {
             Ok(message) => self.emit(message),
-            Err(err) => eprintln!("chat history: {err}"),
+            Err(err) => crate::log_line!("chat history: {err}"),
         }
     }
 
@@ -413,7 +413,7 @@ impl Chat {
         let unacked = match self.store.lock().unwrap().unacked() {
             Ok(unacked) => unacked,
             Err(err) => {
-                eprintln!("chat history: {err}");
+                crate::log_line!("chat history: {err}");
                 return;
             }
         };
@@ -451,7 +451,7 @@ impl Chat {
                 .flatten()
                 .unwrap_or(message),
             Err(err) => {
-                eprintln!("chat history: {err}");
+                crate::log_line!("chat history: {err}");
                 message
             }
         }

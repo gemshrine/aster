@@ -23,8 +23,9 @@ use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 use webrtc::media_stream::Track;
 use webrtc::peer_connection::{
     MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
-    RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer, RTCPeerConnectionIceEvent,
-    RTCPeerConnectionState, RTCSessionDescription,
+    RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceConnectionState, RTCIceGatheringState,
+    RTCIceServer, RTCPeerConnectionIceErrorEvent, RTCPeerConnectionIceEvent,
+    RTCPeerConnectionState, RTCSessionDescription, StatsSelector,
 };
 use webrtc::rtp_transceiver::RtpSender;
 
@@ -34,6 +35,7 @@ use super::media::{
 };
 use super::processing::{Dsp, DspInput, ProcessingConfig};
 use super::settings::{InputMode, VoiceSettings};
+use super::transport::{selected_pair, CandidateKind, SelectedPair, TransportStatus};
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -98,6 +100,8 @@ pub enum VoiceEvent {
     InputLevel {
         dbfs: f32,
     },
+    /// How the call's media travels: direct or through the TURN server.
+    Transport(TransportStatus),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -115,6 +119,8 @@ pub struct CallConfig {
     pub connect_timeout: Duration,
     pub disconnect_grace: Duration,
     pub audio_poll: Duration,
+    /// How often the selected candidate pair is read while a call is up.
+    pub transport_poll: Duration,
     /// Local addresses WebRTC binds for ICE.
     pub udp_addrs: Vec<String>,
 }
@@ -126,6 +132,7 @@ impl Default for CallConfig {
             connect_timeout: Duration::from_secs(20),
             disconnect_grace: Duration::from_secs(10),
             audio_poll: Duration::from_millis(100),
+            transport_poll: Duration::from_secs(1),
             udp_addrs: vec!["0.0.0.0:0".to_string()],
         }
     }
@@ -148,7 +155,12 @@ enum Input {
 
 enum PcEvent {
     Candidate(RTCIceCandidateInit),
+    LocalCandidateKind(CandidateKind),
     State(RTCPeerConnectionState),
+    IceState(RTCIceConnectionState),
+    GatheringState(RTCIceGatheringState),
+    IceError(String),
+    Stats(Option<SelectedPair>),
     Track(Arc<dyn TrackRemote>),
 }
 
@@ -323,6 +335,9 @@ struct Session {
     flags: Arc<Flags>,
     receiver: Option<JoinHandle<()>>,
     media: Option<Media>,
+    transport: TransportStatus,
+    /// A stats poll is in flight; `get_stats` can take seconds.
+    stats_pending: bool,
 }
 
 /// A microphone stream and the processing it feeds.
@@ -444,9 +459,11 @@ struct Actor {
 impl Actor {
     async fn run(mut self) {
         let mut audio_poll = tokio::time::interval(self.config.audio_poll);
+        let mut transport_poll = tokio::time::interval(self.config.transport_poll);
         loop {
             let deadline = self.deadline();
             let in_call = matches!(self.phase, Phase::Connected { .. });
+            let establishing = self.phase.session_mut().is_some();
             tokio::select! {
                 input = self.inputs.recv() => match input {
                     None => {
@@ -466,6 +483,7 @@ impl Actor {
                 }
                 _ = sleep_until(deadline) => self.deadline_passed().await,
                 _ = audio_poll.tick(), if in_call => self.refresh_audio(),
+                _ = transport_poll.tick(), if establishing => self.poll_transport(),
             }
         }
     }
@@ -591,6 +609,11 @@ impl Actor {
                 return Err(err);
             }
         };
+        for candidate in &candidates {
+            if let Some(kind) = CandidateKind::from_sdp(&candidate.candidate) {
+                session.transport.remote_candidates.add(kind);
+            }
+        }
         session.pending_candidates = candidates;
 
         let answer = async {
@@ -714,14 +737,19 @@ impl Actor {
                     sdp_mline_index,
                     ..Default::default()
                 };
+                let kind = CandidateKind::from_sdp(&init.candidate);
                 match &mut self.phase {
                     Phase::Ringing { candidates, .. } => candidates.push(init),
                     phase => {
                         if let Some(session) = phase.session_mut() {
+                            if let Some(kind) = kind {
+                                session.transport.remote_candidates.add(kind);
+                            }
                             session.add_remote_candidate(init).await;
                         }
                     }
                 }
+                self.publish_transport();
             }
             SignalPayload::CallEnd => {
                 let reason = match self.phase {
@@ -746,6 +774,32 @@ impl Actor {
                         sdp_mline_index: init.sdp_mline_index,
                     })
                     .await;
+            }
+            PcEvent::LocalCandidateKind(kind) => {
+                if let Some(session) = self.phase.session_mut() {
+                    session.transport.local_candidates.add(kind);
+                }
+                self.publish_transport();
+            }
+            PcEvent::IceState(state) => {
+                if let Some(session) = self.phase.session_mut() {
+                    session.transport.ice = Some(state.to_string());
+                }
+                self.publish_transport();
+            }
+            PcEvent::GatheringState(state) => {
+                if let Some(session) = self.phase.session_mut() {
+                    session.transport.gathering = Some(state.to_string());
+                }
+                self.publish_transport();
+            }
+            PcEvent::Stats(pair) => self.transport_stats(pair),
+            PcEvent::IceError(error) => {
+                crate::log_line!("call: ice error: {error}");
+                if let Some(session) = self.phase.session_mut() {
+                    session.transport.add_error(error);
+                }
+                self.publish_transport();
             }
             PcEvent::Track(track) => {
                 if let Some(session) = self.phase.session_mut() {
@@ -894,6 +948,8 @@ impl Actor {
             flags,
             receiver: None,
             media: None,
+            transport: TransportStatus::default(),
+            stats_pending: false,
         })
     }
 
@@ -1049,6 +1105,62 @@ impl Actor {
         }
     }
 
+    /// Asks for the candidate pair off the actor: `get_stats` can take
+    /// seconds, and the actor still has a call to run.
+    fn poll_transport(&mut self) {
+        let events = self.pc_tx.clone();
+        let Some(session) = self.phase.session_mut() else {
+            return;
+        };
+        if session.stats_pending {
+            return;
+        }
+        session.stats_pending = true;
+        let (pc, generation) = (session.pc.clone(), session.generation);
+        tokio::spawn(async move {
+            let report = pc
+                .get_stats(std::time::Instant::now(), StatsSelector::None)
+                .await;
+            let pair = selected_pair(&report);
+            let _ = events.send((generation, PcEvent::Stats(pair)));
+        });
+    }
+
+    /// The pair itself is news; its RTT changes constantly and is not.
+    fn transport_stats(&mut self, pair: Option<SelectedPair>) {
+        let Some(session) = self.phase.session_mut() else {
+            return;
+        };
+        session.stats_pending = false;
+        let key = |pair: &Option<SelectedPair>| {
+            pair.as_ref()
+                .map(|p| (p.local, p.remote, p.protocol.clone()))
+        };
+        let changed = key(&session.transport.selected) != key(&pair);
+        session.transport.set_selected(pair);
+        if changed {
+            self.publish_transport();
+        }
+    }
+
+    fn publish_transport(&mut self) {
+        let Some(session) = self.phase.session_mut() else {
+            return;
+        };
+        let transport = session.transport.clone();
+        eprintln!(
+            "DBG {:?} publish {}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+                % 100000,
+            transport.summary()
+        );
+        crate::log_debug!("call: transport {}", transport.summary());
+        self.emit(VoiceEvent::Transport(transport));
+    }
+
     fn refresh_audio(&mut self) {
         let status = match &mut self.phase {
             Phase::Connected { session, .. } => AudioStatus {
@@ -1073,6 +1185,18 @@ impl Actor {
     }
 
     fn end(&mut self, reason: EndReason) {
+        let failed = matches!(
+            reason,
+            EndReason::Failed | EndReason::ConnectionLost | EndReason::Timeout
+        );
+        if let Some(session) = self.phase.session_mut() {
+            let summary = session.transport.summary();
+            if failed {
+                crate::log_line!("call ended as {reason:?}: {summary}");
+            } else {
+                crate::log_debug!("call ended as {reason:?}: {summary}");
+            }
+        }
         self.teardown();
         self.muted = false;
         self.refresh_audio();
@@ -1166,6 +1290,11 @@ struct PcHandler {
 #[async_trait::async_trait]
 impl PeerConnectionEventHandler for PcHandler {
     async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
+        if let Some(kind) = CandidateKind::from_type(event.candidate.typ) {
+            let _ = self
+                .events
+                .send((self.generation, PcEvent::LocalCandidateKind(kind)));
+        }
         if let Ok(init) = event.candidate.to_json() {
             let _ = self
                 .events
@@ -1175,6 +1304,28 @@ impl PeerConnectionEventHandler for PcHandler {
 
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
         let _ = self.events.send((self.generation, PcEvent::State(state)));
+    }
+
+    async fn on_ice_connection_state_change(&self, state: RTCIceConnectionState) {
+        let _ = self
+            .events
+            .send((self.generation, PcEvent::IceState(state)));
+    }
+
+    async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
+        let _ = self
+            .events
+            .send((self.generation, PcEvent::GatheringState(state)));
+    }
+
+    async fn on_ice_candidate_error(&self, event: RTCPeerConnectionIceErrorEvent) {
+        let error = format!(
+            "{} returned {} {}",
+            event.url, event.error_code, event.error_text
+        );
+        let _ = self
+            .events
+            .send((self.generation, PcEvent::IceError(error)));
     }
 
     async fn on_track(&self, track: Arc<dyn TrackRemote>) {

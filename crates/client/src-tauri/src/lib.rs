@@ -1,6 +1,7 @@
 mod attention;
 mod commands;
 pub mod core;
+pub mod logging;
 mod push_to_talk;
 
 use std::sync::Arc;
@@ -27,6 +28,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .on_window_event(attention::hide_on_close)
         .setup(|app| {
+            if let Ok(dir) = app.path().app_log_dir() {
+                logging::init(&dir.join("aster.log"));
+            }
+            crate::log_line!("aster client starting");
             let attention = Arc::new(attention::Attention::install(app.handle())?);
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let voice_settings_path = app.path().app_config_dir()?.join("voice.json");
@@ -54,7 +59,7 @@ pub fn run() {
                 // `unavailable` rather than the app failing to start.
                 let plugin = tauri_plugin_global_shortcut::Builder::new().build();
                 if let Err(err) = app.handle().plugin(plugin) {
-                    eprintln!("global shortcuts unavailable: {err}");
+                    crate::log_line!("global shortcuts unavailable: {err}");
                 }
             }
             let push_to_talk = push_to_talk::PushToTalk::new(voice.clone());
@@ -101,7 +106,7 @@ pub fn run() {
             match Settings::load(&settings_path) {
                 Ok(Some(settings)) => signaling.connect(settings),
                 Ok(None) => {}
-                Err(err) => eprintln!("ignoring unreadable settings: {err}"),
+                Err(err) => crate::log_line!("ignoring unreadable settings: {err}"),
             }
 
             app.manage(AppState {
@@ -133,6 +138,7 @@ pub fn run() {
             commands::call_state,
             commands::set_window_focused,
             commands::focus_window,
+            commands::open_log_dir,
             commands::list_audio_devices,
             commands::get_voice_settings,
             commands::set_voice_settings,
@@ -167,6 +173,6 @@ fn audio_backend() -> Arc<dyn AudioBackend> {
 
 #[cfg(not(feature = "audio-device"))]
 fn audio_backend() -> Arc<dyn AudioBackend> {
-    eprintln!("built without audio-device: calls connect without sound");
+    crate::log_line!("built without audio-device: calls connect without sound");
     Arc::new(crate::core::voice::audio::NullBackend)
 }

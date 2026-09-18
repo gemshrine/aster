@@ -332,7 +332,7 @@ mod device {
                     };
                     framer.push(samples, |frame| sink(frame));
                 },
-                |err| eprintln!("audio capture error: {err}"),
+                |err| crate::log_line!("audio capture error: {err}"),
                 None,
             )
             .map_err(|err| err.to_string())
@@ -369,7 +369,7 @@ mod device {
                         out.fill(sample);
                     }
                 },
-                |err| eprintln!("audio playback error: {err}"),
+                |err| crate::log_line!("audio playback error: {err}"),
                 None,
             )
             .map_err(|err| err.to_string())

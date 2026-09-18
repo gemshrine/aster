@@ -102,7 +102,7 @@ impl PushToTalk {
         if *current != status {
             *current = status.clone();
             if let Err(err) = app.emit("push-to-talk-status", status) {
-                eprintln!("failed to emit event: {err}");
+                crate::log_line!("failed to emit event: {err}");
             }
         }
     }
@@ -157,7 +157,7 @@ impl PushToTalk {
             };
             let press = |pressed| voice.set_push_to_talk(PushToTalkSource::Global, pressed);
             if let Err(err) = portal::run(ready, press, stop).await {
-                eprintln!("push-to-talk portal: {err}");
+                crate::log_line!("push-to-talk portal: {err}");
                 if this.generation.load(Ordering::Relaxed) == generation {
                     this.set_status(
                         &app,
@@ -197,7 +197,7 @@ mod portal {
         // portal sees an empty app id (Hyprland: `global, :push-to-talk`).
         if let Ok(app_id) = APP_ID.try_into() {
             if let Err(err) = ashpd::register_host_app(app_id).await {
-                eprintln!("push-to-talk portal runs without an app id: {err}");
+                crate::log_line!("push-to-talk portal runs without an app id: {err}");
             }
         }
         let portal = GlobalShortcuts::new().await?;

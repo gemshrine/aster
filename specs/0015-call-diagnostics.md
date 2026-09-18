@@ -40,6 +40,11 @@ pub struct TransportStatus {
 - Источники: `PeerConnectionEventHandler::on_ice_connection_state_change`, `on_ice_gathering_state_change`, `on_ice_candidate_error`, плюс собственный подсчёт кандидатов в `on_ice_candidate` и из входящих `SignalPayload::IceCandidate`.
 - Выбранная пара — из `PeerConnection::get_stats(now, StatsSelector::None)`: в отчёте берётся `candidate_pairs()` с `nominated == true` и `state == Succeeded`, по `local_candidate_id`/`remote_candidate_id` достаются `RTCIceCandidateStats` (`candidate_type`, `protocol`, `relay_protocol`), RTT — `current_round_trip_time`.
 - `path` = `relay`, если локальный **или** удалённый кандидат выбранной пары имеет тип `relay`; иначе `direct`.
+- Три вещи выяснились на практике, и от них зависит реализация:
+  - в паре кандидаты названы «голым» id (`candidate:<hash>`), а сами записи лежат под префиксом (`RTCLocalIceCandidate_<id>`), поэтому поиск идёт по окончанию ключа;
+  - записи удалённого кандидата в отчёте может не быть (peer-reflexive) — `remote` остаётся `None`, путь определяется по известной стороне;
+  - на одной из сторон пара может не иметь `nominated`, поэтому запасной вариант — успешная пара с наибольшим трафиком.
+- `get_stats` берёт мьютекс ядра соединения, поэтому опрос идёт **не в акторе звонка**, а в отдельной задаче, результат возвращается тем же каналом, что и события `PeerConnection`. Одновременно висит не больше одного опроса.
 - Опрос статистики — на том же тике, что и `audio_poll` (100 мс), но не чаще раза в секунду; вне `Connected`/`Connecting` не опрашивается.
 - Событие `call-transport` эмитится при изменении полей (кроме `rtt_ms`, который меняется постоянно — он шлётся не чаще раза в секунду).
 

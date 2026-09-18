@@ -18,6 +18,7 @@ use client_tauri_lib::core::voice::call::{
 use client_tauri_lib::core::voice::media::signal::{tone_ratio, Sine};
 use client_tauri_lib::core::voice::media::{level_dbfs, FRAME};
 use client_tauri_lib::core::voice::settings::{InputMode, NoiseSuppression, VoiceSettings};
+use client_tauri_lib::core::voice::transport::{CandidateKind, TransportPath};
 use common::{fast_timing, spawn_server, ALICE, BOB, WAIT};
 use signaling_server::hub::QueueLimits;
 use tokio::sync::mpsc;
@@ -682,6 +683,36 @@ async fn push_to_talk_sends_only_while_the_key_is_held() {
     // A global press counts the same as the window.
     alice.voice.set_push_to_talk(PushToTalkSource::Global, true);
     bob.wait_for_tone(440.0, 400).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transport_reports_the_selected_candidate_pair() {
+    let (mut alice, mut bob) = connected_call().await;
+
+    let event = alice
+        .wait(|e| matches!(e, VoiceEvent::Transport(t) if t.selected.is_some()))
+        .await;
+    let VoiceEvent::Transport(status) = event else {
+        unreachable!()
+    };
+    let pair = status.selected.clone().expect("a nominated pair");
+    // Both peers are on loopback, so the pair is host to host over UDP.
+    assert_eq!(status.path, Some(TransportPath::Direct));
+    assert_eq!(pair.local, CandidateKind::Host);
+    // The peer's candidate is not always in the report (peer reflexive).
+    assert!(
+        matches!(pair.remote, None | Some(CandidateKind::Host)),
+        "{:?}",
+        pair.remote
+    );
+    assert_eq!(pair.protocol, "udp");
+    assert!(status.local_candidates.host > 0, "{status:?}");
+    assert!(status.remote_candidates.host > 0, "{status:?}");
+    assert_eq!(status.ice.as_deref(), Some("connected"));
+    assert!(status.errors.is_empty(), "{:?}", status.errors);
+
+    bob.voice.hang_up().await.unwrap();
+    bob.wait_ended(EndReason::Hangup).await;
 }
 
 #[test]
