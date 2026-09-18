@@ -150,9 +150,30 @@ fn toggle_window(app: &AppHandle) {
     }
 }
 
+/// Shows a desktop notification from a thread with no runtime attached.
+///
+/// On Linux `show()` goes through notify-rust, which drives D-Bus with
+/// `zbus::block_on`; that starts a runtime of its own, and doing so from a
+/// tokio worker panics with "Cannot start a runtime from within a runtime"
+/// (#81). The panic killed the task forwarding core events to the UI, so a
+/// call would ring and then never show up as connected. Notifications are
+/// rare, so one thread each is the cheap way to stay out of the runtime.
 fn notify(app: &AppHandle, title: &str, body: &str) {
-    if let Err(err) = app.notification().builder().title(title).body(body).show() {
-        crate::log_line!("notification not shown: {err}");
+    let (app, title, body) = (app.clone(), title.to_string(), body.to_string());
+    off_runtime(move || {
+        if let Err(err) = app.notification().builder().title(title).body(body).show() {
+            crate::log_line!("notification not shown: {err}");
+        }
+    });
+}
+
+/// Runs `task` where no async runtime is current.
+fn off_runtime(task: impl FnOnce() + Send + 'static) {
+    if let Err(err) = std::thread::Builder::new()
+        .name("aster-notify".into())
+        .spawn(task)
+    {
+        crate::log_line!("no thread for the notification: {err}");
     }
 }
 
@@ -188,8 +209,22 @@ fn with_dot(icon: &Image<'_>) -> Image<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::{shorten, with_dot, NOTIFICATION_BODY};
+    use super::{off_runtime, shorten, with_dot, NOTIFICATION_BODY};
     use tauri::image::Image;
+
+    /// Notifications must not run where a tokio runtime is current: see the
+    /// note on [`super::notify`].
+    #[tokio::test]
+    async fn notifications_run_outside_the_runtime() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        off_runtime(move || {
+            let _ = tx.send(tokio::runtime::Handle::try_current().is_ok());
+        });
+        let inside_runtime = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the task ran");
+        assert!(!inside_runtime, "a runtime is current on that thread");
+    }
 
     #[test]
     fn short_bodies_are_left_alone() {
