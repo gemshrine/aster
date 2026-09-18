@@ -24,6 +24,19 @@ pub struct VoiceSettings {
     /// Global push-to-talk accelerator (`"F13"`, `"Alt+Space"`) where no
     /// portal exists; `None` means no global key.
     pub ptt_shortcut: Option<String>,
+    pub ice_transport_policy: IceTransportPolicy,
+}
+
+/// Which paths a call may take, see `specs/0015-call-diagnostics.md`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IceTransportPolicy {
+    /// Direct when possible, TURN as a fallback.
+    #[default]
+    All,
+    /// Always through the TURN server: slower, but works where direct UDP
+    /// does not pass at all.
+    Relay,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +70,7 @@ impl Default for VoiceSettings {
             input_mode: InputMode::VoiceActivity,
             ptt_release_delay_ms: 200,
             ptt_shortcut: None,
+            ice_transport_policy: IceTransportPolicy::All,
         }
     }
 }
@@ -159,6 +173,24 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_policy_falls_back_to_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("voice.json");
+        std::fs::write(&path, r#"{"ice_transport_policy":"through-the-moon"}"#).unwrap();
+        // A value from a newer version must not keep the user from calling.
+        assert_eq!(
+            VoiceSettings::load(&path).ice_transport_policy,
+            IceTransportPolicy::All
+        );
+
+        std::fs::write(&path, r#"{"ice_transport_policy":"relay"}"#).unwrap();
+        assert_eq!(
+            VoiceSettings::load(&path).ice_transport_policy,
+            IceTransportPolicy::Relay
+        );
+    }
+
+    #[test]
     fn json_matches_spec() {
         let json = serde_json::to_value(VoiceSettings::default()).unwrap();
         assert_eq!(
@@ -173,6 +205,7 @@ mod tests {
                 "input_mode": "voice_activity",
                 "ptt_release_delay_ms": 200,
                 "ptt_shortcut": null,
+                "ice_transport_policy": "all",
             })
         );
     }

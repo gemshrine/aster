@@ -30,7 +30,8 @@
   "input_mode": "voice_activity",
   "vad_threshold_dbfs": -45,
   "ptt_release_delay_ms": 200,
-  "ptt_shortcut": null
+  "ptt_shortcut": null,
+  "ice_transport_policy": "all"
 }
 ```
 
@@ -43,6 +44,7 @@
 | `input_mode` | `"voice_activity"` \| `"push_to_talk"` | `"voice_activity"` |
 | `vad_threshold_dbfs` | −70…−20 | −45 |
 | `ptt_release_delay_ms` | 0…1000 | 200 |
+| `ice_transport_policy` | `"all"` \| `"relay"` — `relay` гонит звонок только через TURN, см. `0015` | `"all"` |
 
 Значения вне диапазона приводятся к границе.
 

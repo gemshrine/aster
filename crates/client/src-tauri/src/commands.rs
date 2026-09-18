@@ -11,7 +11,9 @@ use crate::core::chat::{Chat, ChatError, Message};
 use crate::core::settings::Settings;
 use crate::core::signaling::{ConnectionState, CoreEvent, SignalingHandle};
 use crate::core::voice::audio::{AudioBackend, AudioDevices};
-use crate::core::voice::call::{CallError, CallState, PushToTalkSource, VoiceEvent, VoiceHandle};
+use crate::core::voice::call::{
+    CallError, CallState, PushToTalkSource, TurnCheck, VoiceEvent, VoiceHandle,
+};
 use crate::core::voice::settings::VoiceSettings;
 use crate::push_to_talk::PushToTalkStatus;
 
@@ -246,6 +248,19 @@ pub fn set_window_focused(state: State<'_, AppState>, app: AppHandle, focused: b
             .voice
             .set_push_to_talk(PushToTalkSource::Window, false);
     }
+}
+
+/// Gathers candidates on an empty connection: tells STUN/TURN trouble apart
+/// from a problem between the two peers (specs/0015).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn check_turn(state: State<'_, AppState>) -> Result<TurnCheck, CommandError> {
+    crate::core::voice::call::check_turn(
+        &state.signaling,
+        &crate::core::voice::call::CallConfig::default(),
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .map_err(|err| CommandError::new("failed", err))
 }
 
 /// Opens the folder holding `aster.log` so it can be sent over (specs/0015).

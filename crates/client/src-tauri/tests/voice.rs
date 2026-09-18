@@ -17,7 +17,9 @@ use client_tauri_lib::core::voice::call::{
 };
 use client_tauri_lib::core::voice::media::signal::{tone_ratio, Sine};
 use client_tauri_lib::core::voice::media::{level_dbfs, FRAME};
-use client_tauri_lib::core::voice::settings::{InputMode, NoiseSuppression, VoiceSettings};
+use client_tauri_lib::core::voice::settings::{
+    IceTransportPolicy, InputMode, NoiseSuppression, VoiceSettings,
+};
 use client_tauri_lib::core::voice::transport::{CandidateKind, TransportPath};
 use common::{fast_timing, spawn_server, ALICE, BOB, WAIT};
 use signaling_server::hub::QueueLimits;
@@ -713,6 +715,68 @@ async fn transport_reports_the_selected_candidate_pair() {
 
     bob.voice.hang_up().await.unwrap();
     bob.wait_ended(EndReason::Hangup).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relay_only_calls_need_a_turn_server() {
+    // The test server hands out no ICE servers, so `relay` leaves ICE with
+    // nothing to gather and the call cannot connect, while `all` still does.
+    let addr = spawn_server(QueueLimits::default()).await;
+    let relay_only = VoiceSettings {
+        ice_transport_policy: IceTransportPolicy::Relay,
+        ..VoiceSettings::default()
+    };
+    let alice = Peer::with_audio(addr, ALICE, 440.0, test_config(), 0.0, relay_only).await;
+    let mut bob = Peer::online(addr, BOB, 1000.0, test_config()).await;
+    tokio::time::timeout(WAIT, async {
+        while !matches!(
+            alice.signaling.state(),
+            ConnectionState::Connected {
+                peer_online: true,
+                ..
+            }
+        ) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("peer did not come online");
+
+    let mut alice = alice;
+    alice.voice.start_call().await.unwrap();
+    bob.wait_state(CallState::Ringing).await;
+    bob.voice.accept_call().await.unwrap();
+
+    let connected = tokio::time::timeout(
+        Duration::from_secs(3),
+        alice.wait(|e| matches!(e, VoiceEvent::State(CallState::Connected { .. }))),
+    )
+    .await;
+    assert!(
+        connected.is_err(),
+        "relay-only connected without a TURN server"
+    );
+
+    alice.voice.hang_up().await.unwrap();
+    alice.wait_ended(EndReason::Hangup).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn turn_check_reports_what_ice_can_gather() {
+    let addr = spawn_server(QueueLimits::default()).await;
+    let alice = Peer::online(addr, ALICE, 440.0, test_config()).await;
+
+    let check = client_tauri_lib::core::voice::call::check_turn(
+        &alice.signaling,
+        &test_config(),
+        Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+
+    // Loopback only, and the test server hands out no STUN or TURN.
+    assert!(check.host > 0, "{check:?}");
+    assert_eq!((check.srflx, check.relay), (0, 0), "{check:?}");
 }
 
 #[test]

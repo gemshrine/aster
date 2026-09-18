@@ -139,6 +139,7 @@ pub fn run() {
             commands::set_window_focused,
             commands::focus_window,
             commands::open_log_dir,
+            commands::check_turn,
             commands::list_audio_devices,
             commands::get_voice_settings,
             commands::set_voice_settings,
