@@ -81,6 +81,9 @@ pub fn run() {
                     voice_events_in.core_event(&event);
                     chat_events.handle_event(&event).await;
                 }
+                // Only a panic or a closed core ends this loop, and then the
+                // window stops hearing about anything (#81).
+                crate::log_line!("core event loop stopped");
             });
 
             let handle = app.handle().clone();
@@ -90,6 +93,7 @@ pub fn run() {
                     message_attention.message(&handle, &message);
                     commands::emit_upsert(&handle, message);
                 }
+                crate::log_line!("message event loop stopped");
             });
 
             let handle = app.handle().clone();
@@ -101,6 +105,7 @@ pub fn run() {
                     }
                     commands::emit_voice(&handle, event);
                 }
+                crate::log_line!("voice event loop stopped");
             });
 
             match Settings::load(&settings_path) {
